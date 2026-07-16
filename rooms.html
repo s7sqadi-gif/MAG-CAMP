@@ -1,0 +1,6 @@
+{% extends "base.html" %}{% block content %}
+<h2>الجولة الأسبوعية — تبدأ {{week_start}} وتنتهي الخميس</h2>
+<div class="cards"><div class="card">العمال <b>{{workers}}</b></div><div class="card">الغرف <b>{{rooms}}</b></div></div>
+<div class="panel"><h3>إنجاز المشرفين</h3>{% for p in progress %}{% set pct=(p.done*100/p.total)|round if p.total else 0 %}
+<div class="progress-row"><span>{{p.name}}</span><span>{{p.done}} / {{p.total}} — {{pct}}%</span><div class="bar"><i style="width:{{pct}}%"></i></div></div>{% endfor %}</div>
+{% endblock %}
