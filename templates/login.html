@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login">
+<form method="post" class="loginbox">
+  <h1>MAG CAMP</h1>
+  <p>نظام إدارة وتشغيل السكن</p>
+  {% with messages=get_flashed_messages(with_categories=true) %}
+    {% for category,message in messages %}
+      <div class="notice {{category}}">{{message}}</div>
+    {% endfor %}
+  {% endwith %}
+  <input name="username" placeholder="الرقم الوظيفي" required>
+  <input type="password" name="password" placeholder="كلمة المرور" required>
+  <button>تسجيل الدخول</button>
+  <small>كلمة المرور الافتراضية: 123456</small>
+</form>
+</body>
+</html>

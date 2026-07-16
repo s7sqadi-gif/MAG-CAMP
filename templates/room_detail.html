@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="panel">
+  <h2>الغرفة {{room.room_no if room else ''}}</h2>
+  <p>السعة: {{room.capacity if room else '-'}}</p>
+  {% if me.role == 'housing_supervisor' %}
+    <a class="btn" href="/room/{{room.room_no}}/inspect">تسجيل الجولة الأسبوعية</a>
+  {% endif %}
+</div>
+<div class="panel">
+  <table>
+    <tr><th>الرقم الوظيفي</th><th>الاسم</th></tr>
+    {% for w in workers %}
+      <tr><td>{{w.employee_no}}</td><td>{{w.full_name}}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}
