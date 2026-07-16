@@ -164,7 +164,7 @@ class App(BaseHTTPRequestHandler):
     def login_post(self):
         f=self.form(); c=db(); u=c.execute('select * from users where username=? and active=1',(f.get('username',''),)).fetchone()
         if not u or not verify(u['password_hash'],f.get('password','')): c.close(); return self.login('بيانات الدخول غير صحيحة')
-        c.commit(); c.close(); sid=secrets.token_urlsafe(24); SESS[sid]={'u':dict(u)}
+        # disabled last_login update c.commit(); c.close(); sid=secrets.token_urlsafe(24); SESS[sid]={'u':dict(u)}
         self.send_response(302); self.send_header('Set-Cookie',f'magcamp={sid}; Path=/; HttpOnly; SameSite=Lax'); self.send_header('Location','/change-password' if u['must_change_password'] else '/'); self.end_headers()
     def change_password_form(self,u,msg=''):
         notice=f"<div class='notice'>{e(msg)}</div>" if msg else ''
