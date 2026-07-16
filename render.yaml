@@ -3,5 +3,6 @@ services:
     name: mag-camp
     runtime: python
     plan: free
-    buildCommand: "echo Ready"
+    buildCommand: "echo Build complete"
     startCommand: "python app.py"
+    autoDeploy: true
