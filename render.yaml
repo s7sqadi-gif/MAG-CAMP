@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: mag-camp-demo
+    runtime: python
+    plan: free
+    buildCommand: ""
+    startCommand: python app.py
+    healthCheckPath: /login
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.5
