@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: mag-camp-phase1
+    name: mag-camp
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
