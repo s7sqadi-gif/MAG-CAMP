@@ -1,0 +1,34 @@
+MAG CAMP — Phase 4 Final Development Build
+Date: 2026-07-19
+Base: v4.6 Enterprise RC
+
+Implemented in this build:
+- Additive database migration only; no table deletion or database reset.
+- Room ownership through rooms.supervisor_id.
+- Geographic, balanced assignment across 11 housing supervisors.
+- Rooms 3801–3816 are excluded from supervisor ownership when present.
+- Manager and supervisor dashboard cards for warehouses, contractor rooms, internal-security rooms, vacancy, maintenance, closure, bathroom assets, and absence reports.
+- Clickable dashboard room-type cards.
+- Sector and inspection-route screen.
+- Four bathroom complexes, each containing 156 numbered toilets and 80 numbered basins.
+- Individual inspection page and permanent inspection history for every numbered toilet/basin.
+- Maintenance ticket creation from a toilet/basin inspection.
+- Worker absence reporting by the assigned housing supervisor.
+- Manager follow-up, rejection, and closure of worker absence reports.
+- Supervisors are restricted to their assigned rooms and bathroom assets.
+- Room inspection creation restricted to housing supervisors.
+- Existing housing/transfer/checkout workflows preserved.
+- Existing production database and backup retained.
+- Responsive mobile layout retained.
+
+Verification:
+- Python syntax compilation: PASS.
+- Flask import and additive migration: PASS.
+- Housing manager dashboard/rooms/sector/absence/housing workflows HTTP smoke test: PASS.
+- Assigned rooms: 960.
+- Supervisor distribution: 88, 88, 88, then 87 rooms for each remaining supervisor.
+- Numbered bathroom assets: 624 toilets + 320 basins across four complexes.
+
+Notes:
+- Legacy tests that assert old explicit room ranges no longer apply because the approved Phase 4 requirement replaces those ranges with balanced geographic ownership.
+- Final user acceptance testing should be done on a copy of production before deployment.
