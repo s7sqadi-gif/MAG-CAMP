@@ -74,7 +74,7 @@ def ensure_schema():
    'requests':{'supervisor_id':'INTEGER','supervisor_decision_at':'TEXT'},
    'inspections':{'week_key':'TEXT','maintenance_ticket_id':'INTEGER'},
    'rooms':{'usage_type':"TEXT DEFAULT 'residential'",'length_m':'REAL','width_m':'REAL','area_m2':'REAL','status':"TEXT DEFAULT 'active'",'notes':'TEXT','updated_at':'TEXT','supervisor_id':'INTEGER','sector_name':'TEXT'},
-   'workers':{'source_row':'INTEGER','import_batch_id':'INTEGER','phone':'TEXT'},
+   'workers':{'archived':'INTEGER DEFAULT 0','status':"TEXT DEFAULT 'active'",'source_row':'INTEGER','import_batch_id':'INTEGER','phone':'TEXT','updated_at':'TEXT'},
    'worker_change_requests':{'phone':'TEXT','kit_bed':'INTEGER DEFAULT 0','kit_mattress':'INTEGER DEFAULT 0','kit_pillow':'INTEGER DEFAULT 0','kit_sheet':'INTEGER DEFAULT 0','kit_blanket':'INTEGER DEFAULT 0'}
   }.items():
    cols=column_names(c,table)
@@ -120,6 +120,11 @@ def is_maintenance_only(u):return u['role'] in ('maintenance_manager','maintenan
 def assigned_clause(u,alias='r'):
  if u['role']!='housing_supervisor':return '1=1',[]
  return f'{alias}.supervisor_id=?',[u['id']]
+
+def assigned_zones(c,u):
+ if u['role']!='housing_supervisor':
+  return [str(r['zone_name']) for r in c.execute("SELECT DISTINCT zone_name FROM bathroom_complexes WHERE active=1 ORDER BY CAST(zone_name AS INTEGER),zone_name").fetchall()]
+ return [str(r['zone']) for r in c.execute("SELECT DISTINCT zone FROM rooms WHERE supervisor_id=? AND zone IS NOT NULL ORDER BY CAST(zone AS INTEGER),zone",(u['id'],)).fetchall()]
 
 def supervisor_for_room(room_no):
  try:n=int(room_no)
@@ -207,9 +212,16 @@ def dashboard():
   vacant=sum(1 for x in residential if x['occupied']==0); crowded=sum(1 for x in residential if x['occupied']>(x['capacity'] or 0)); occupied=sum(1 for x in residential if x['occupied']>0 and x['occupied']<=x['capacity'])
   closed=sum(1 for x in room_stats if (x['status'] or '') in ('closed','out_of_service') or (x['usage_type'] or '')=='closed'); maintenance=sum(1 for x in room_stats if (x['usage_type'] or '')=='maintenance')
   usage_counts={k:sum(1 for x in room_stats if (x['usage_type'] or 'residential')==k) for k in ('warehouse','contractor','security')}
-  bathroom_complexes_count=c.execute("SELECT COUNT(DISTINCT complex_id) FROM bathroom_assets"+(" WHERE supervisor_id=?" if u['role']=='housing_supervisor' else ''),([u['id']] if u['role']=='housing_supervisor' else [])).fetchone()[0]
-  toilets_count=c.execute("SELECT COUNT(*) FROM bathroom_assets WHERE asset_type='toilet'"+(" AND supervisor_id=?" if u['role']=='housing_supervisor' else ''),([u['id']] if u['role']=='housing_supervisor' else [])).fetchone()[0]
-  basins_count=c.execute("SELECT COUNT(*) FROM bathroom_assets WHERE asset_type='basin'"+(" AND supervisor_id=?" if u['role']=='housing_supervisor' else ''),([u['id']] if u['role']=='housing_supervisor' else [])).fetchone()[0]
+  zones_for_user=assigned_zones(c,u)
+  if u['role']=='housing_supervisor' and zones_for_user:
+   marks=','.join('?' for _ in zones_for_user)
+   bathroom_complexes_count=c.execute(f"SELECT COUNT(DISTINCT a.complex_id) FROM bathroom_assets a JOIN bathroom_complexes b ON b.id=a.complex_id WHERE CAST(b.zone_name AS TEXT) IN ({marks})",zones_for_user).fetchone()[0]
+   toilets_count=c.execute(f"SELECT COUNT(*) FROM bathroom_assets a JOIN bathroom_complexes b ON b.id=a.complex_id WHERE a.asset_type='toilet' AND CAST(b.zone_name AS TEXT) IN ({marks})",zones_for_user).fetchone()[0]
+   basins_count=c.execute(f"SELECT COUNT(*) FROM bathroom_assets a JOIN bathroom_complexes b ON b.id=a.complex_id WHERE a.asset_type='basin' AND CAST(b.zone_name AS TEXT) IN ({marks})",zones_for_user).fetchone()[0]
+  else:
+   bathroom_complexes_count=c.execute("SELECT COUNT(DISTINCT complex_id) FROM bathroom_assets").fetchone()[0]
+   toilets_count=c.execute("SELECT COUNT(*) FROM bathroom_assets WHERE asset_type='toilet'").fetchone()[0]
+   basins_count=c.execute("SELECT COUNT(*) FROM bathroom_assets WHERE asset_type='basin'").fetchone()[0]
   absence_open=c.execute("SELECT COUNT(*) FROM absence_reports WHERE status NOT IN ('closed','rejected')"+(" AND reported_by=?" if u['role']=='housing_supervisor' else ''),([u['id']] if u['role']=='housing_supervisor' else [])).fetchone()[0]
   tparams=[u['id']] if u['role'] in ('housing_supervisor','housing_monitor') else []
   twhere=' AND reported_by=?' if tparams else ''
@@ -275,6 +287,17 @@ def workers():
  sql+=' ORDER BY CAST(w.room_no AS INTEGER),w.full_name LIMIT 300'
  with closing(conn()) as c:rows=c.execute(sql,p).fetchall()
  return page('''<h2>العمال</h2><form><input class="search" name="q" value="{{q}}" placeholder="بحث"><button class="btn">بحث</button></form><table class="tbl"><tr><th>الرقم</th><th>الاسم</th><th>الجنسية</th><th>المهنة</th><th>الجوال</th><th>الزون</th><th>الغرفة</th></tr>{% for x in rows %}<tr><td>{{x.employee_no}}</td><td><a href="{{url_for('worker_detail',wid=x.id)}}">{{x.full_name}}</a></td><td>{{x.nationality}}</td><td>{{x.profession or '-'}}</td><td>{{x.phone or '-'}}</td><td>{{x.zone}}</td><td>{{x.room_no}}</td></tr>{% endfor %}</table>''','العمال',u,rows=rows,q=q)
+@app.get('/workers/<int:wid>')
+@login_required
+def worker_detail(wid):
+ u=current_user();cl,args=assigned_clause(u,'r')
+ with closing(conn()) as c:
+  w=c.execute(f'''SELECT w.* FROM workers w LEFT JOIN rooms r ON r.room_no=w.room_no WHERE w.id=? AND COALESCE(w.archived,0)=0 AND {cl}''',[wid]+list(args)).fetchone()
+  if not w:abort(404)
+  events=c.execute('''SELECT e.*,u.display_name FROM worker_events e LEFT JOIN users u ON u.id=e.user_id WHERE e.worker_id=? ORDER BY e.id DESC LIMIT 50''',(wid,)).fetchall()
+  absences=c.execute('''SELECT a.*,u.display_name reporter FROM absence_reports a LEFT JOIN users u ON u.id=a.reported_by WHERE a.worker_id=? ORDER BY a.id DESC''',(wid,)).fetchall()
+ return page('''<div class="card"><h2>{{w.full_name}}</h2><div class="grid"><p><b>الرقم الوظيفي:</b> {{w.employee_no}}</p><p><b>رقم الإقامة:</b> {{w.iqama_no or '-'}}</p><p><b>الجنسية:</b> {{w.nationality or '-'}}</p><p><b>المهنة:</b> {{w.profession or '-'}}</p><p><b>الجوال:</b> {{w.phone or '-'}}</p><p><b>الزون:</b> {{w.zone or '-'}}</p><p><b>الغرفة:</b> <a href="{{url_for('room_detail',room_no=w.room_no)}}">{{w.room_no}}</a></p></div>{% if u.role=='housing_supervisor' %}<a class="btn" href="{{url_for('new_absence_report',wid=w.id)}}">رفع بلاغ عدم تواجد</a>{% endif %} <a class="btn btn2" href="{{url_for('housing_kit_worker',wid=w.id)}}">العهدة السكنية</a></div><div class="card"><h3>بلاغات عدم التواجد</h3><div class="tbl-wrap"><table class="tbl"><tr><th>التاريخ</th><th>المدة</th><th>الحالة</th><th>المشرف</th><th>الملاحظات</th></tr>{% for x in absences %}<tr><td>{{x.created_at}}</td><td>{{x.absence_duration}}</td><td>{{x.status}}</td><td>{{x.reporter or '-'}}</td><td>{{x.notes}}</td></tr>{% else %}<tr><td colspan="5" class="muted">لا توجد بلاغات مسجلة لهذا العامل.</td></tr>{% endfor %}</table></div></div><div class="card"><h3>سجل العامل</h3><div class="timeline">{% for x in events %}<div class="timeline-item"><b>{{x.event_type}}</b><p>{{x.description or '-'}}</p><small>{{x.created_at}} - {{x.display_name or '-'}}</small></div>{% else %}<p class="muted">لا يوجد سجل عمليات حتى الآن.</p>{% endfor %}</div></div>''','تفاصيل العامل',u,w=w,events=events,absences=absences,u=u)
+
 @app.get('/rooms')
 @login_required
 def rooms():
@@ -651,8 +674,13 @@ def sector_dashboard():
  u=current_user();cl,args=assigned_clause(u,'r')
  with closing(conn()) as c:
   rooms=c.execute(f'''SELECT r.*,COUNT(w.id) occupied FROM rooms r LEFT JOIN workers w ON w.room_no=r.room_no AND w.archived=0 WHERE {cl} GROUP BY r.id ORDER BY CAST(r.zone AS INTEGER),CAST(r.room_no AS INTEGER)''',args).fetchall()
-  assets_where='WHERE a.supervisor_id=?' if u['role']=='housing_supervisor' else ''
-  assets_params=[u['id']] if u['role']=='housing_supervisor' else []
+  zones_for_user=assigned_zones(c,u)
+  if u['role']=='housing_supervisor' and zones_for_user:
+   marks=','.join('?' for _ in zones_for_user); assets_where=f'WHERE CAST(b.zone_name AS TEXT) IN ({marks})'; assets_params=zones_for_user
+  elif u['role']=='housing_supervisor':
+   assets_where='WHERE 1=0'; assets_params=[]
+  else:
+   assets_where=''; assets_params=[]
   assets=c.execute(f'''SELECT a.*,b.name complex_name,b.zone_name,(SELECT MAX(created_at) FROM bathroom_asset_inspections i WHERE i.asset_id=a.id) last_inspection FROM bathroom_assets a JOIN bathroom_complexes b ON b.id=a.complex_id {assets_where} ORDER BY CAST(b.zone_name AS INTEGER),a.asset_type,a.asset_no''',assets_params).fetchall()
   today=date.today().isoformat()
   inspected_today=c.execute("SELECT COUNT(DISTINCT location_id) FROM inspections WHERE inspection_type='room' AND substr(created_at,1,10)=?"+(" AND inspector_id=?" if u['role']=='housing_supervisor' else ''),([today,u['id']] if u['role']=='housing_supervisor' else [today])).fetchone()[0]
@@ -665,7 +693,10 @@ def bathroom_asset_inspection(asset_id):
  if u['role']!='housing_supervisor':abort(403)
  err=''
  with closing(conn()) as c:
-  asset=c.execute('''SELECT a.*,b.name complex_name,b.zone_name FROM bathroom_assets a JOIN bathroom_complexes b ON b.id=a.complex_id WHERE a.id=? AND a.supervisor_id=?''',(asset_id,u['id'])).fetchone()
+  zones_for_user=assigned_zones(c,u)
+  if not zones_for_user:abort(404)
+  marks=','.join('?' for _ in zones_for_user)
+  asset=c.execute(f'''SELECT a.*,b.name complex_name,b.zone_name FROM bathroom_assets a JOIN bathroom_complexes b ON b.id=a.complex_id WHERE a.id=? AND CAST(b.zone_name AS TEXT) IN ({marks})''',[asset_id]+zones_for_user).fetchone()
   if not asset:abort(404)
   if request.method=='POST':
    condition=request.form.get('condition_status','ممتاز');notes=request.form.get('notes','').strip();mreq=int(bool(request.form.get('maintenance_required')));photo=None;ticket_id=None
@@ -706,7 +737,7 @@ def absence_reports_list():
    c.execute('UPDATE absence_reports SET status=?,manager_id=?,manager_notes=?,updated_at=? WHERE id=?',(status,u['id'],notes,now(),rid));audit(c,u,'decision','absence_report',rid,{'status':status});c.commit();return redirect(url_for('absence_reports_list'))
   where='' if is_admin(u) else 'WHERE a.reported_by=?';params=[] if is_admin(u) else [u['id']]
   rows=c.execute(f'''SELECT a.*,w.employee_no,w.full_name,u.display_name reporter FROM absence_reports a JOIN workers w ON w.id=a.worker_id LEFT JOIN users u ON u.id=a.reported_by {where} ORDER BY a.id DESC''',params).fetchall()
- return page('''<h2>بلاغات العامل غير المتواجد</h2><div class="tbl-wrap"><table class="tbl"><tr><th>العامل</th><th>الغرفة</th><th>المدة</th><th>المشرف</th><th>الحالة</th><th>الملاحظات</th><th>الإجراء</th></tr>{% for x in rows %}<tr><td>{{x.employee_no}} - {{x.full_name}}</td><td>{{x.room_no}}</td><td>{{x.absence_duration}}</td><td>{{x.reporter}}</td><td>{{x.status}}</td><td>{{x.notes}}</td><td>{% if admin and x.status not in ('closed','rejected') %}<form method="post"><input type="hidden" name="report_id" value="{{x.id}}"><input name="manager_notes" placeholder="ملاحظة"><button class="btn" name="status" value="follow_up">متابعة</button> <button class="btn" name="status" value="closed">إغلاق</button> <button class="btn danger" name="status" value="rejected">رفض</button></form>{% endif %}</td></tr>{% endfor %}</table></div>''','بلاغات عدم التواجد',u,rows=rows,admin=is_admin(u))
+ return page('''<h2>بلاغات العامل غير المتواجد</h2><div class="tbl-wrap"><table class="tbl"><tr><th>العامل</th><th>الغرفة</th><th>المدة</th><th>المشرف</th><th>الحالة</th><th>الملاحظات</th><th>الإجراء</th></tr>{% for x in rows %}<tr><td>{{x.employee_no}} - {{x.full_name}}</td><td>{{x.room_no}}</td><td>{{x.absence_duration}}</td><td>{{x.reporter}}</td><td>{{x.status}}</td><td>{{x.notes}}</td><td>{% if admin and x.status not in ('closed','rejected') %}<form method="post"><input type="hidden" name="report_id" value="{{x.id}}"><input name="manager_notes" placeholder="ملاحظة"><button class="btn" name="status" value="follow_up">متابعة</button> <button class="btn" name="status" value="closed">إغلاق</button> <button class="btn danger" name="status" value="rejected">رفض</button></form>{% endif %}</td></tr>{% else %}<tr><td colspan="7" class="muted">لا توجد بلاغات عدم تواجد حالياً. افتح صفحة العامل لرفع بلاغ جديد.</td></tr>{% endfor %}</table></div>''','بلاغات عدم التواجد',u,rows=rows,admin=is_admin(u))
 
 @app.get('/notifications')
 @login_required
