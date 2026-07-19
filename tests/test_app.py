@@ -45,6 +45,7 @@ class MagCampPhase1Tests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["status"], "ok")
         self.assertEqual(response.json["database"], "ok")
+        self.assertEqual(response.json["phase"], 4)
 
     def test_counts_and_active_roles(self):
         c = magcamp.conn()
@@ -52,7 +53,7 @@ class MagCampPhase1Tests(unittest.TestCase):
             self.assertEqual(c.execute("SELECT COUNT(*) FROM workers WHERE archived=0").fetchone()[0], 4372)
             self.assertEqual(c.execute("SELECT COUNT(*) FROM rooms").fetchone()[0], 974)
             self.assertEqual(c.execute("SELECT COUNT(*) FROM users WHERE active=1 AND role='housing_supervisor'").fetchone()[0], 11)
-            self.assertEqual(c.execute("SELECT COUNT(*) FROM users WHERE active=1 AND role='housing_monitor'").fetchone()[0], 3)
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM users WHERE active=1 AND role='housing_monitor'").fetchone()[0], 4)
         finally:
             c.close()
 
@@ -127,6 +128,80 @@ class MagCampPhase1Tests(unittest.TestCase):
         response = self.client.get("/rooms/1101")
         self.assertEqual(response.status_code, 200)
         self.assertIn("الغرفة 1101".encode("utf-8"), response.data)
+
+    def test_amir_suhail_account_active(self):
+        c = magcamp.conn()
+        try:
+            u = c.execute("SELECT * FROM users WHERE employee_no='96880'").fetchone()
+            self.assertEqual(u["display_name"], "أمير سهيل")
+            self.assertEqual(u["active"], 1)
+            self.assertEqual(u["role"], "housing_monitor")
+        finally:
+            c.close()
+
+    def test_supervisor_cannot_access_audit_logs(self):
+        self.authenticate_without_forced_change("149867")
+        self.assertEqual(self.client.get("/audit-logs").status_code, 403)
+
+    def test_bathroom_report_creates_ticket(self):
+        self.authenticate_without_forced_change("149867")
+        response = self.client.post("/bathroom-reports/new", data={
+            "bathroom_no": "B-101", "zone_name": "1", "issue_type": "تسريب",
+            "priority": "urgent", "description": "تسريب اختبار"
+        }, follow_redirects=False)
+        self.assertEqual(response.status_code, 302)
+        c = magcamp.conn()
+        try:
+            report = c.execute("SELECT * FROM bathroom_reports WHERE bathroom_no='B-101'").fetchone()
+            self.assertIsNotNone(report)
+            ticket = c.execute("SELECT * FROM maintenance_tickets WHERE id=?", (report["maintenance_ticket_id"],)).fetchone()
+            self.assertEqual(ticket["location_type"], "bathroom")
+        finally:
+            c.close()
+
+    def test_supervisor_add_worker_requires_manager_approval(self):
+        self.authenticate_without_forced_change("149867")
+        response = self.client.post("/worker-change-requests/new", data={
+            "change_type": "add", "employee_no": "P4TEST001", "iqama_no": "2999999999",
+            "full_name": "PHASE FOUR TEST", "nationality": "Test", "profession": "Tester",
+            "room_no": "2413", "reason": "اختبار"
+        }, follow_redirects=False)
+        self.assertIn(response.status_code, (302, 200))
+        c = magcamp.conn()
+        try:
+            self.assertIsNone(c.execute("SELECT * FROM workers WHERE employee_no='P4TEST001' AND archived=0").fetchone())
+            q = c.execute("SELECT * FROM worker_change_requests WHERE employee_no='P4TEST001'").fetchone()
+            self.assertIsNotNone(q)
+            self.assertEqual(q["status"], "pending")
+        finally:
+            c.close()
+
+    def test_manager_approves_add_worker(self):
+        self.authenticate_without_forced_change("149867")
+        self.client.post("/worker-change-requests/new", data={
+            "change_type": "add", "employee_no": "P4APPROVE1", "iqama_no": "2888888888",
+            "full_name": "APPROVAL TEST", "nationality": "Test", "profession": "Tester",
+            "room_no": "2504", "reason": "اختبار اعتماد"
+        })
+        c = magcamp.conn()
+        try:
+            qid = c.execute("SELECT id FROM worker_change_requests WHERE employee_no='P4APPROVE1'").fetchone()[0]
+        finally:
+            c.close()
+        self.client.get("/logout")
+        self.authenticate_without_forced_change("109753")
+        response = self.client.post(f"/worker-change-requests/{qid}", data={
+            "decision": "approved", "decision_reason": "معتمد"
+        }, follow_redirects=False)
+        self.assertEqual(response.status_code, 302)
+        c = magcamp.conn()
+        try:
+            worker = c.execute("SELECT * FROM workers WHERE employee_no='P4APPROVE1' AND archived=0").fetchone()
+            request_row = c.execute("SELECT status FROM worker_change_requests WHERE id=?", (qid,)).fetchone()
+            self.assertIsNotNone(worker)
+            self.assertEqual(request_row["status"], "approved")
+        finally:
+            c.close()
 
 
 if __name__ == "__main__":
