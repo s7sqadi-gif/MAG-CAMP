@@ -1,18 +1,12 @@
-MAG CAMP Enterprise Phase 4.5
-Build date: 2026-07-19
+MAG CAMP Phase 4.6 RC - Test Report
 
-Automated regression tests: 21 passed
-Python compile: passed
-Database migration: additive only (no tables dropped or recreated)
+Automated acceptance tests: 5 passed
 
-Implemented in this build:
-- Language selection screen before login (Arabic / English)
-- Dynamic RTL/LTR shell and translated login/navigation
-- Occupancy Management page
-- Color-coded Occupancy Map
-- New housing fields: mobile number and profession
-- Housing kit recorded only through approved new housing workflow
-- Worker timeline for new operations
-- Room Control Center additions (maintenance and inspection history)
-- Notifications center
-- Audit logs remain prospective; no fabricated historical dates
+Verified:
+- Executive dashboard with donut statistics and no vacancy/overcrowding detail tables
+- Monitor/data-entry new housing request requires assigned room supervisor approval, then housing/services manager approval
+- Cross-supervisor transfer requires both source and destination supervisors, then management approval
+- Maintenance workflow: report with before photo -> maintenance acceptance -> execution -> after photo -> reporter verification -> closure
+- Maintenance roles have no housing navigation or housing actions
+- Language selection is preserved after login
+- Additive database migration only; existing workers/rooms preserved

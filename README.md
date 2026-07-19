@@ -1,33 +1,17 @@
-# MAG CAMP — Phase 4.2 Beta
+# MAG CAMP — Phase 4.6 Enterprise RC
 
-الإصدار الثاني من المرحلة الرابعة، مبني فوق Phase 4.1 دون إعادة بناء النظام.
+This release extends the existing production-ready Flask/SQLite project without rebuilding or deleting existing data.
 
-## أبرز الإضافات
+## Main changes
+- Executive home dashboard with KPIs, donut charts, latest maintenance/housing activity, and supervisor completion percentages.
+- Vacancy and overcrowding details remain in the separate Occupancy Management page.
+- Managers have a read-only executive overview and no “take inspection” action.
+- New housing, transfer, and removal workflow with room-supervisor approvals and final approval by the Housing Manager or Services Manager.
+- Cross-supervisor transfer requires approval from both room supervisors.
+- Amir and housing monitors can create requests but cannot execute them directly.
+- Maintenance workflow requires acceptance, execution, after photos, and closure verification by the original reporter.
+- Maintenance users have no housing permissions.
+- Improved MAG logo and preserved Arabic/English language selection after login.
 
-- لوحة مدير السكن والخدمات المساندة: الشواغر ومواقعها، التكدس ومواقعه، الإشغال حسب نطاق الصلاحية.
-- لوحة مشرف السكن: تعرض الغرف والشواغر والتكدس التابعة للمشرف فقط.
-- لوحة مدير الصيانة: البلاغات الجديدة والمفتوحة وقيد التنفيذ والمغلقة، مع توزيع حسب النوع والزون.
-- إرفاق صورة إلزامية عند إنشاء بلاغ صيانة جديد.
-- إرفاق صورة إلزامية عند إنشاء بلاغ صيانة من داخل الجولة الأسبوعية.
-- سجل صور مرتبط بكل بلاغ صيانة.
-- تسجيل مستلزمات التسكين: السرير، المرتبة، المخدة، الشرشف، البطانية.
-- شاشة مستلزمات متاحة لمدير السكن والخدمات المساندة والمشرف والمراقب حسب الصلاحيات.
-- استمرار شعار مجموعة المجال العربي في جميع الشاشات.
-
-## التشغيل
-
-```bash
-pip install -r requirements.txt
-python app.py
-```
-
-## ملاحظة مهمة للنشر
-
-حافظ على مجلد `uploads` كمساحة تخزين دائمة في بيئة الإنتاج حتى لا تضيع صور البلاغات عند إعادة النشر.
-
-## Enterprise Phase 4.5 additions
-- Language selection is shown before sign-in. Every user chooses Arabic or English.
-- Existing production data is preserved through additive SQLite migrations.
-- New housing requests require profession and mobile number and include housing-kit delivery.
-- Historical timelines intentionally start with new system operations; no legacy dates are invented.
-- New routes: `/occupancy-management`, `/occupancy-map`, `/notifications`, `/workers/<id>`.
+## Deployment
+Use the existing Render configuration. Preserve the production DATABASE_PATH and uploads storage. The migration is additive-only.
