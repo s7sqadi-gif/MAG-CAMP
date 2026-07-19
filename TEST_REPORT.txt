@@ -1,18 +1,15 @@
-MAG CAMP Phase 4 Foundation v4.0 Beta
+MAG CAMP Phase 4.1 Beta — Test Report
 Date: 2026-07-19
 
-Automated tests: 16 passed / 16
+Automated tests: 18/18 PASSED
 
 Verified:
-- Health endpoint reports Phase 4.
-- Existing login and forced password-change flow.
-- Amir Suhail account is active.
-- Managers can access users and audit logs.
-- Supervisors cannot access users or audit logs.
-- Supervisors see only their room ranges.
-- Supervisors and monitors see only their own maintenance/bathroom reports.
-- Bathroom report creates a linked maintenance ticket.
-- Supervisor can request worker addition/deletion only within assigned scope.
-- Worker is not added before approval.
-- Housing manager approval creates the worker record.
-- Existing Phase 3 room schema, dashboard, and room detail remain operational.
+- Existing Phase 3 and Phase 4.0 functions remain operational.
+- Supervisor weekly-round page shows only assigned rooms.
+- Worker names are displayed for assigned rooms.
+- Supervisor cannot access rooms outside assignment.
+- A maintenance ticket can be created and linked from a weekly room inspection.
+- Bathroom reports still create standalone maintenance tickets.
+- Worker add/delete approval workflow remains operational.
+- Amir Suhail account remains active.
+- Users and audit log remain restricted from supervisors.

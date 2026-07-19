@@ -203,6 +203,48 @@ class MagCampPhase1Tests(unittest.TestCase):
         finally:
             c.close()
 
+    def test_phase41_supervisor_weekly_round_shows_assigned_rooms_and_names(self):
+        self.authenticate_without_forced_change("149867")
+        c = magcamp.conn()
+        try:
+            rng = c.execute("SELECT room_start,room_end FROM assignments a JOIN users u ON u.id=a.user_id WHERE u.employee_no='149867' ORDER BY a.id LIMIT 1").fetchone()
+            worker = c.execute("SELECT room_no,full_name FROM workers WHERE archived=0 AND CAST(room_no AS INTEGER) BETWEEN ? AND ? ORDER BY CAST(room_no AS INTEGER) LIMIT 1", (min(rng[0],rng[1]),max(rng[0],rng[1]))).fetchone()
+        finally:
+            c.close()
+        self.assertIsNotNone(worker)
+        response = self.client.get("/inspections")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(str(worker["room_no"]).encode(), response.data)
+        self.assertIn(worker["full_name"].encode("utf-8"), response.data)
+        self.assertNotIn(b">1101<", response.data)
+
+    def test_phase41_inspection_can_create_linked_maintenance_ticket(self):
+        self.authenticate_without_forced_change("149867")
+        c = magcamp.conn()
+        try:
+            rng = c.execute("SELECT room_start,room_end FROM assignments a JOIN users u ON u.id=a.user_id WHERE u.employee_no='149867' ORDER BY a.id LIMIT 1").fetchone()
+            room = c.execute("SELECT room_no FROM rooms WHERE CAST(room_no AS INTEGER) BETWEEN ? AND ? AND usage_type='residential' ORDER BY CAST(room_no AS INTEGER) LIMIT 1", (min(rng[0],rng[1]),max(rng[0],rng[1]))).fetchone()[0]
+        finally:
+            c.close()
+        response = self.client.post("/inspections/new", data={
+            "room_no": room, "actual_count": "4", "cleanliness": "جيد",
+            "notes": "جولة اختبار 4.1", "maintenance_required": "1",
+            "maintenance_category": "تكييف", "maintenance_priority": "urgent",
+            "maintenance_description": "عطل تكييف من الجولة"
+        }, follow_redirects=False)
+        self.assertEqual(response.status_code, 302)
+        c = magcamp.conn()
+        try:
+            inspection = c.execute("SELECT * FROM inspections WHERE location_id=? AND notes='جولة اختبار 4.1' ORDER BY id DESC LIMIT 1", (room,)).fetchone()
+            self.assertIsNotNone(inspection)
+            self.assertIsNotNone(inspection["maintenance_ticket_id"])
+            ticket = c.execute("SELECT * FROM maintenance_tickets WHERE id=?", (inspection["maintenance_ticket_id"],)).fetchone()
+            self.assertEqual(ticket["location_type"], "room")
+            self.assertEqual(ticket["location_id"], room)
+            self.assertEqual(ticket["category"], "تكييف")
+        finally:
+            c.close()
+
 
 if __name__ == "__main__":
     unittest.main()
