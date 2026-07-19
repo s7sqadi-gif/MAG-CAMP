@@ -1,13 +1,15 @@
-import hashlib, hmac, json, os, sqlite3
+import hashlib, hmac, json, os, sqlite3, uuid
 from contextlib import closing
 from datetime import date, datetime
 from functools import wraps
-from flask import Flask, abort, redirect, render_template_string, request, session, url_for
+from werkzeug.utils import secure_filename
+from flask import Flask, abort, redirect, render_template_string, request, session, url_for, send_from_directory
 
 ROOT=os.path.dirname(os.path.abspath(__file__)); DATA_DIR=os.path.join(ROOT,'data'); os.makedirs(DATA_DIR,exist_ok=True)
 DB=os.environ.get('DATABASE_PATH',os.path.join(DATA_DIR,'mhoms.db'))
+UPLOAD_DIR=os.path.join(ROOT,'uploads'); os.makedirs(UPLOAD_DIR,exist_ok=True)
 app=Flask(__name__); app.secret_key=os.environ.get('SECRET_KEY','local-development-secret-change-me')
-app.config.update(SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Lax',SESSION_COOKIE_SECURE=os.environ.get('RENDER','').lower()=='true')
+app.config.update(SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Lax',SESSION_COOKIE_SECURE=os.environ.get('RENDER','').lower()=='true',MAX_CONTENT_LENGTH=8*1024*1024)
 ROLE_AR={'services_manager':'مدير الخدمات المساندة','housing_manager':'مدير السكن','housing_supervisor':'مشرف السكن','housing_monitor':'مراقب السكن','maintenance_manager':'مدير الصيانة','maintenance_supervisor':'مشرف الصيانة'}
 REQ_AR={'transfer':'نقل عامل','final_exit':'خروج نهائي','outside_temp':'سكن خارجي مؤقت','outside_perm':'سكن خارجي دائم','add_worker':'إضافة عامل جديد','delete_worker':'حذف/أرشفة عامل'}
 STATUS_AR={'pending':'بانتظار الاعتماد','approved':'معتمد','rejected':'مرفوض','new':'جديد','in_progress':'قيد التنفيذ','completed':'مكتمل','verified':'تم التحقق','closed':'مغلق'}
@@ -17,6 +19,11 @@ def conn():
  c=sqlite3.connect(DB,timeout=30); c.row_factory=sqlite3.Row; c.execute('PRAGMA foreign_keys=ON'); return c
 
 def now(): return datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+def save_upload(file_storage, prefix='ticket'):
+ if not file_storage or not file_storage.filename:return None
+ ext=os.path.splitext(secure_filename(file_storage.filename))[1].lower()
+ if ext not in ('.jpg','.jpeg','.png','.webp'):raise ValueError('صيغة الصورة غير مدعومة')
+ name=f"{prefix}_{uuid.uuid4().hex}{ext}"; file_storage.save(os.path.join(UPLOAD_DIR,name)); return name
 def make_hash(p):
  s=os.urandom(16); d=hashlib.pbkdf2_hmac('sha256',p.encode(),s,150000).hex(); return f'{s.hex()}:{d}'
 def verify(stored,p):
@@ -40,6 +47,10 @@ def ensure_schema():
   CREATE TABLE IF NOT EXISTS import_batches(id INTEGER PRIMARY KEY AUTOINCREMENT,file_name TEXT,rows_total INTEGER,workers_imported INTEGER,special_rooms INTEGER,created_by INTEGER,created_at TEXT);
   CREATE TABLE IF NOT EXISTS bathroom_reports(id INTEGER PRIMARY KEY AUTOINCREMENT,report_no TEXT NOT NULL UNIQUE,bathroom_no TEXT NOT NULL,zone_name TEXT,issue_type TEXT NOT NULL,description TEXT,priority TEXT DEFAULT 'normal',status TEXT DEFAULT 'new',reported_by INTEGER NOT NULL,maintenance_ticket_id INTEGER,created_at TEXT NOT NULL,closed_at TEXT);
   CREATE TABLE IF NOT EXISTS worker_change_requests(id INTEGER PRIMARY KEY AUTOINCREMENT,request_no TEXT NOT NULL UNIQUE,change_type TEXT NOT NULL,worker_id INTEGER,employee_no TEXT,iqama_no TEXT,full_name TEXT,nationality TEXT,profession TEXT,zone TEXT,room_no TEXT,reason TEXT,requested_by INTEGER NOT NULL,status TEXT DEFAULT 'pending',decided_by INTEGER,decision_reason TEXT,created_at TEXT NOT NULL,decided_at TEXT);
+  CREATE TABLE IF NOT EXISTS ticket_photos(id INTEGER PRIMARY KEY AUTOINCREMENT,ticket_id INTEGER NOT NULL,photo_path TEXT NOT NULL,photo_kind TEXT DEFAULT 'report',uploaded_by INTEGER NOT NULL,created_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS housing_kit_deliveries(id INTEGER PRIMARY KEY AUTOINCREMENT,worker_id INTEGER NOT NULL,bed INTEGER DEFAULT 0,mattress INTEGER DEFAULT 0,pillow INTEGER DEFAULT 0,sheet INTEGER DEFAULT 0,blanket INTEGER DEFAULT 0,delivered_by INTEGER NOT NULL,notes TEXT,delivered_at TEXT NOT NULL,updated_at TEXT);
+  CREATE INDEX IF NOT EXISTS idx_ticket_photos_ticket ON ticket_photos(ticket_id);
+  CREATE INDEX IF NOT EXISTS idx_kit_worker ON housing_kit_deliveries(worker_id);
   CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
   CREATE INDEX IF NOT EXISTS idx_inspections_location ON inspections(inspection_type,location_id,created_at);
   CREATE INDEX IF NOT EXISTS idx_tickets_status ON maintenance_tickets(status);
@@ -51,7 +62,8 @@ def ensure_schema():
    'requests':{'supervisor_id':'INTEGER','supervisor_decision_at':'TEXT'},
    'inspections':{'week_key':'TEXT','maintenance_ticket_id':'INTEGER'},
    'rooms':{'usage_type':"TEXT DEFAULT 'residential'",'length_m':'REAL','width_m':'REAL','area_m2':'REAL','status':"TEXT DEFAULT 'active'",'notes':'TEXT','updated_at':'TEXT'},
-   'workers':{'source_row':'INTEGER','import_batch_id':'INTEGER'}
+   'workers':{'source_row':'INTEGER','import_batch_id':'INTEGER'},
+   'worker_change_requests':{'kit_bed':'INTEGER DEFAULT 0','kit_mattress':'INTEGER DEFAULT 0','kit_pillow':'INTEGER DEFAULT 0','kit_sheet':'INTEGER DEFAULT 0','kit_blanket':'INTEGER DEFAULT 0'}
   }.items():
    cols=column_names(c,table)
    for name,typ in defs.items():
@@ -90,7 +102,7 @@ BASE='''<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><me
 :root{--green:#123b32;--green2:#1e5a4b;--bg:#f4f6f8;--red:#a52222;--amber:#a66a00}
 *{box-sizing:border-box}body{font-family:Tahoma,Arial;background:var(--bg);margin:0;color:#24302d}.top{background:var(--green);color:#fff;padding:12px 18px;display:flex;justify-content:space-between;align-items:center;gap:12px;position:sticky;top:0;z-index:20}.brand{display:flex;align-items:center;gap:10px}.brand img{width:46px;height:46px;object-fit:contain;background:#fff;border-radius:9px;padding:4px}.wrap{display:flex;min-height:calc(100vh - 70px)}aside{width:235px;background:#fff;padding:14px;box-shadow:0 0 8px #ccc;flex-shrink:0}aside a{display:block;padding:11px;color:var(--green);text-decoration:none;border-bottom:1px solid #eee;border-radius:7px}aside a:hover{background:#edf4f1}main{flex:1;padding:22px;min-width:0}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px}.card{background:#fff;border-radius:13px;padding:17px;box-shadow:0 2px 8px #d8dddd;margin-bottom:14px}.num{font-size:27px;font-weight:bold;margin-top:5px}.muted{color:#68736f;font-size:13px}.tbl-wrap{overflow:auto;background:#fff;border-radius:12px}.tbl{width:100%;border-collapse:collapse;min-width:720px}.tbl th,.tbl td{padding:10px;border-bottom:1px solid #eee;text-align:right;font-size:14px}.tbl th{background:#edf4f1;position:sticky;top:0}.search,input,select,textarea{padding:11px;border:1px solid #ccd4d1;border-radius:8px;max-width:100%;font:inherit}.search{width:min(420px,100%);margin-bottom:10px}.btn{display:inline-block;background:var(--green);color:#fff;border:0;border-radius:8px;padding:10px 16px;text-decoration:none;cursor:pointer}.btn2{background:#6a7c76}.danger{background:var(--red)}.login{max-width:390px;margin:9vh auto;background:#fff;padding:28px;border-radius:14px;box-shadow:0 3px 18px #bbb}.err{color:#b00020}.ok{color:#0a6b3c}.badge{padding:4px 8px;border-radius:10px;background:#e5eee9;white-space:nowrap}.badge.red{background:#fde7e7;color:#8d1616}.badge.amber{background:#fff1d6;color:#805000}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.field label{display:block;margin:5px 0}.field input,.field select,.field textarea{width:100%}.mobile-nav{display:none}
 @media(max-width:800px){.top{align-items:flex-start}.top .userline{font-size:12px;text-align:left}.wrap{display:block}.desktop-nav{display:none}.mobile-nav{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;background:#fff;padding:8px;position:sticky;top:70px;z-index:15;box-shadow:0 2px 7px #ddd}.mobile-nav a{text-align:center;text-decoration:none;color:var(--green);font-size:12px;padding:9px 3px;border-radius:8px;background:#f1f5f3}main{padding:12px}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.card{padding:14px}.num{font-size:23px}.brand small{font-size:10px}.brand img{width:40px;height:40px}.tbl{min-width:650px}}
-</style></head><body><div class="top"><div class="brand"><img src="{{url_for('static',filename='mag_logo.png')}}" alt="MAG"><div><b>MAG CAMP</b><br><small>نظام إدارة سكن ولي العهد — المرحلة الرابعة — الإصدار 4.1</small></div></div>{% if u %}<div class="userline">{{u['display_name']}}<br><small>{{roles.get(u['role'],u['role'])}} | <a style="color:white" href="{{url_for('logout')}}">خروج</a></small></div>{% endif %}</div>{% if u %}<nav class="mobile-nav"><a href="{{url_for('dashboard')}}">الرئيسية</a><a href="{{url_for('rooms')}}">الغرف</a><a href="{{url_for('workers')}}">العمال</a><a href="{{url_for('inspections')}}">الجولات</a><a href="{{url_for('tickets')}}">الصيانة</a><a href="{{url_for('requests_list')}}">الطلبات</a></nav><div class="wrap"><aside class="desktop-nav"><a href="{{url_for('dashboard')}}">الرئيسية</a><a href="{{url_for('workers')}}">العمال</a><a href="{{url_for('rooms')}}">الغرف</a><a href="{{url_for('inspections')}}">الجولة الأسبوعية</a><a href="{{url_for('bathroom_reports')}}">بلاغات دورات المياه</a><a href="{{url_for('requests_list')}}">طلبات العمال</a><a href="{{url_for('worker_change_requests')}}">إضافة/حذف عامل</a><a href="{{url_for('tickets')}}">بلاغات الصيانة</a>{% if admin %}<a href="{{url_for('users')}}">المستخدمون</a><a href="{{url_for('audit_logs')}}">سجل العمليات</a>{% endif %}<a href="{{url_for('change_password')}}">تغيير كلمة المرور</a></aside><main>{{body|safe}}</main></div>{% else %}{{body|safe}}{% endif %}</body></html>'''
+</style></head><body><div class="top"><div class="brand"><img src="{{url_for('static',filename='mag_logo.png')}}" alt="MAG"><div><b>MAG CAMP</b><br><small>نظام إدارة سكن ولي العهد — المرحلة الرابعة — الإصدار 4.2</small></div></div>{% if u %}<div class="userline">{{u['display_name']}}<br><small>{{roles.get(u['role'],u['role'])}} | <a style="color:white" href="{{url_for('logout')}}">خروج</a></small></div>{% endif %}</div>{% if u %}<nav class="mobile-nav"><a href="{{url_for('dashboard')}}">الرئيسية</a><a href="{{url_for('rooms')}}">الغرف</a><a href="{{url_for('workers')}}">العمال</a><a href="{{url_for('inspections')}}">الجولات</a><a href="{{url_for('tickets')}}">الصيانة</a><a href="{{url_for('requests_list')}}">الطلبات</a></nav><div class="wrap"><aside class="desktop-nav"><a href="{{url_for('dashboard')}}">الرئيسية</a><a href="{{url_for('workers')}}">العمال</a><a href="{{url_for('rooms')}}">الغرف</a><a href="{{url_for('inspections')}}">الجولة الأسبوعية</a><a href="{{url_for('bathroom_reports')}}">بلاغات دورات المياه</a><a href="{{url_for('requests_list')}}">طلبات العمال</a><a href="{{url_for('worker_change_requests')}}">إضافة/حذف عامل</a><a href="{{url_for('housing_kit_list')}}">تسليم مستلزمات السكن</a><a href="{{url_for('tickets')}}">بلاغات الصيانة</a>{% if u.role in ('maintenance_manager','maintenance_supervisor','housing_manager','services_manager') %}<a href="{{url_for('maintenance_dashboard')}}">لوحة الصيانة</a>{% endif %}{% if admin %}<a href="{{url_for('users')}}">المستخدمون</a><a href="{{url_for('audit_logs')}}">سجل العمليات</a>{% endif %}<a href="{{url_for('change_password')}}">تغيير كلمة المرور</a></aside><main>{{body|safe}}</main></div>{% else %}{{body|safe}}{% endif %}</body></html>'''
 def page(body,title='MAG CAMP',user=None,**ctx):return render_template_string(BASE,title=title,body=render_template_string(body,**ctx),u=user,roles=ROLE_AR,admin=bool(user and is_admin(user)))
 
 @app.get('/health')
@@ -98,7 +110,7 @@ def health():
  try:
   with closing(conn()) as c:
    c.execute('SELECT 1'); counts={t:c.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0] for t in ('users','rooms','workers','requests','inspections','maintenance_tickets')}
-  return {'status':'ok','database':'ok','phase':4,'counts':counts},200
+  return {'status':'ok','database':'ok','phase':4,'release':'4.2','counts':counts},200
  except Exception as e:return {'status':'error','database':'unavailable','message':str(e)},503
 @app.route('/login',methods=['GET','POST'])
 def login():
@@ -132,36 +144,42 @@ def change_password():
 def dashboard():
  u=current_user();cl,args=assigned_clause(u,'r');week=date.today().strftime('%Y-W%W')
  with closing(conn()) as c:
-  rooms=c.execute(f'SELECT COUNT(*) FROM rooms r WHERE {cl}',args).fetchone()[0]
-  residential=c.execute(f"SELECT COUNT(*) FROM rooms r WHERE {cl} AND COALESCE(r.usage_type,'residential')='residential'",args).fetchone()[0]
-  workers=c.execute(f'''SELECT COUNT(*) FROM workers w WHERE archived=0 AND EXISTS(SELECT 1 FROM rooms r WHERE r.room_no=w.room_no AND {cl})''',args).fetchone()[0]
-  capacity=c.execute(f"SELECT COALESCE(SUM(r.capacity),0) FROM rooms r WHERE {cl} AND COALESCE(r.usage_type,'residential')='residential'",args).fetchone()[0]
-  overcrowded=c.execute(f'''SELECT COUNT(*) FROM (SELECT r.id FROM rooms r LEFT JOIN workers w ON w.room_no=r.room_no AND w.archived=0 WHERE {cl} AND COALESCE(r.usage_type,'residential')='residential' GROUP BY r.id HAVING COUNT(w.id)>r.capacity)''',args).fetchone()[0]
-  vacant_rooms=c.execute(f'''SELECT COUNT(*) FROM (SELECT r.id FROM rooms r LEFT JOIN workers w ON w.room_no=r.room_no AND w.archived=0 WHERE {cl} AND COALESCE(r.usage_type,'residential')='residential' GROUP BY r.id HAVING COUNT(w.id)=0)''',args).fetchone()[0]
-  done=c.execute("SELECT COUNT(DISTINCT location_id) FROM inspections WHERE inspection_type='room' AND inspector_id=? AND week_key=?",(u['id'],week)).fetchone()[0] if u['role']=='housing_supervisor' else c.execute("SELECT COUNT(*) FROM inspections WHERE inspection_type='room' AND week_key=?",(week,)).fetchone()[0]
-  if u['role']=='housing_supervisor':
-   pending=c.execute("SELECT COUNT(*) FROM worker_change_requests WHERE status='pending' AND requested_by=?",(u['id'],)).fetchone()[0]+c.execute("SELECT COUNT(*) FROM requests WHERE status='pending' AND supervisor_id=?",(u['id'],)).fetchone()[0]
-   open_t=c.execute("SELECT COUNT(*) FROM maintenance_tickets WHERE status NOT IN ('closed','verified') AND reported_by=?",(u['id'],)).fetchone()[0]
-  elif u['role']=='housing_monitor':
-   pending=c.execute("SELECT COUNT(*) FROM requests WHERE status='pending' AND requested_by=?",(u['id'],)).fetchone()[0]
-   open_t=c.execute("SELECT COUNT(*) FROM maintenance_tickets WHERE status NOT IN ('closed','verified') AND reported_by=?",(u['id'],)).fetchone()[0]
-  else:
-   pending=c.execute("SELECT COUNT(*) FROM requests WHERE status='pending'").fetchone()[0]+c.execute("SELECT COUNT(*) FROM worker_change_requests WHERE status='pending'").fetchone()[0]
-   open_t=c.execute("SELECT COUNT(*) FROM maintenance_tickets WHERE status NOT IN ('closed','verified')").fetchone()[0]
-  usages=c.execute(f'''SELECT COALESCE(r.usage_type,'residential') usage,COUNT(*) total FROM rooms r WHERE {cl} GROUP BY COALESCE(r.usage_type,'residential') ORDER BY total DESC''',args).fetchall()
-  occupancy=round((workers/capacity*100),1) if capacity else 0
-  vacant_beds=max(capacity-workers,0)
- return page('''<h2>لوحة التحكم التنفيذية</h2><p class="muted">ملخص مباشر لحالة السكن حسب صلاحياتك.</p><div class="cards">
- <div class="card"><div>إجمالي العمال</div><div class="num">{{workers}}</div></div>
- <div class="card"><div>الغرف الظاهرة لك</div><div class="num">{{rooms}}</div><div class="muted">السكنية {{residential}}</div></div>
- <div class="card"><div>نسبة الإشغال</div><div class="num">{{occupancy}}%</div><div class="muted">السعة {{capacity}}</div></div>
- <div class="card"><div>الأسرة الشاغرة</div><div class="num">{{vacant_beds}}</div></div>
- <div class="card"><div>غرف متكدسة</div><div class="num">{{overcrowded}}</div></div>
- <div class="card"><div>غرف سكنية فارغة</div><div class="num">{{vacant_rooms}}</div></div>
- <div class="card"><div>جولات هذا الأسبوع</div><div class="num">{{done}}</div></div>
- <div class="card"><div>طلبات معلقة</div><div class="num">{{pending}}</div></div>
- <div class="card"><div>صيانة مفتوحة</div><div class="num">{{open_t}}</div></div></div>
- <div class="card"><h3>استخدامات الغرف</h3><div class="grid">{% for x in usages %}<div><span class="badge">{{usage_ar.get(x.usage,x.usage)}}</span> <b>{{x.total}}</b></div>{% endfor %}</div></div>''','الرئيسية',u,rooms=rooms,residential=residential,workers=workers,capacity=capacity,occupancy=occupancy,vacant_beds=vacant_beds,overcrowded=overcrowded,vacant_rooms=vacant_rooms,done=done,pending=pending,open_t=open_t,usages=usages,usage_ar=ROOM_USAGE_AR)
+  room_stats=c.execute(f'''SELECT r.room_no,r.zone,r.capacity,COUNT(w.id) occupied,(r.capacity-COUNT(w.id)) free_beds
+   FROM rooms r LEFT JOIN workers w ON w.room_no=r.room_no AND w.archived=0
+   WHERE {cl} AND COALESCE(r.usage_type,'residential')='residential'
+   GROUP BY r.id ORDER BY CAST(r.room_no AS INTEGER)''',args).fetchall()
+  rooms=len(room_stats);workers=sum(x['occupied'] for x in room_stats);capacity=sum(x['capacity'] or 0 for x in room_stats)
+  vacant=[x for x in room_stats if x['occupied']==0]; available=[x for x in room_stats if x['free_beds']>0]; crowded=[x for x in room_stats if x['free_beds']<0]
+  open_t=c.execute("SELECT COUNT(*) FROM maintenance_tickets WHERE status NOT IN ('closed','verified')"+(" AND reported_by=?" if u['role'] in ('housing_supervisor','housing_monitor') else ''),([u['id']] if u['role'] in ('housing_supervisor','housing_monitor') else [])).fetchone()[0]
+  done=c.execute("SELECT COUNT(DISTINCT location_id) FROM inspections WHERE inspection_type='room' AND week_key=?"+(" AND inspector_id=?" if u['role']=='housing_supervisor' else ''),([week,u['id']] if u['role']=='housing_supervisor' else [week])).fetchone()[0]
+  zone_map={}
+  for x in room_stats:
+   z=str(x['zone']); zone_map.setdefault(z,{'zone':z,'rooms':0,'occupied':0,'capacity':0}); zone_map[z]['rooms']+=1; zone_map[z]['occupied']+=x['occupied']; zone_map[z]['capacity']+=x['capacity'] or 0
+  zone_rows=list(zone_map.values())
+  pending=c.execute("SELECT COUNT(*) FROM worker_change_requests WHERE status='pending'"+(" AND requested_by=?" if u['role']=='housing_supervisor' else ''),([u['id']] if u['role']=='housing_supervisor' else [])).fetchone()[0]
+ occupancy=round(workers*100/capacity,1) if capacity else 0
+ title='لوحة مشرف السكن' if u['role']=='housing_supervisor' else 'لوحة مدير السكن والخدمات المساندة' if is_admin(u) else 'لوحة التحكم'
+ return page('''<h2>{{dash_title}}</h2><p class="muted">المؤشرات المعروضة حسب صلاحيات ونطاق المستخدم.</p>
+ <div class="cards"><div class="card"><div>العمال</div><div class="num">{{workers}}</div></div><div class="card"><div>الغرف السكنية</div><div class="num">{{rooms}}</div></div><div class="card"><div>نسبة الإشغال</div><div class="num">{{occupancy}}%</div></div><div class="card"><div>أسرة شاغرة</div><div class="num">{{capacity-workers}}</div></div><div class="card"><div>غرف بها شواغر</div><div class="num">{{available|length}}</div></div><div class="card"><div>غرف متكدسة</div><div class="num">{{crowded|length}}</div></div><div class="card"><div>الصيانة المفتوحة</div><div class="num">{{open_t}}</div></div><div class="card"><div>جولات الأسبوع</div><div class="num">{{done}}</div></div></div>
+ <div class="grid"><div class="card"><h3>مواقع الشواغر</h3><div class="tbl-wrap"><table class="tbl"><tr><th>الزون</th><th>الغرفة</th><th>المشغول</th><th>السعة</th><th>الشاغر</th></tr>{% for x in available[:150] %}<tr><td>{{x.zone}}</td><td><a href="{{url_for('room_detail',room_no=x.room_no)}}">{{x.room_no}}</a></td><td>{{x.occupied}}</td><td>{{x.capacity}}</td><td><span class="badge">{{x.free_beds}}</span></td></tr>{% endfor %}</table></div></div>
+ <div class="card"><h3>مواقع التكدس</h3><div class="tbl-wrap"><table class="tbl"><tr><th>الزون</th><th>الغرفة</th><th>المشغول</th><th>السعة</th><th>الزيادة</th></tr>{% for x in crowded %}<tr><td>{{x.zone}}</td><td><a href="{{url_for('room_detail',room_no=x.room_no)}}">{{x.room_no}}</a></td><td>{{x.occupied}}</td><td>{{x.capacity}}</td><td><span class="badge red">{{-x.free_beds}}</span></td></tr>{% endfor %}</table></div></div></div>
+ <div class="card"><h3>ملخص الزونات</h3><div class="tbl-wrap"><table class="tbl"><tr><th>الزون</th><th>الغرف</th><th>المقيمون</th><th>السعة</th></tr>{% for z in zone_rows %}<tr><td>{{z.zone}}</td><td>{{z.rooms}}</td><td>{{z.occupied}}</td><td>{{z.capacity}}</td></tr>{% endfor %}</table></div></div>''','لوحة التحكم',u,dash_title=title,workers=workers,rooms=rooms,capacity=capacity,occupancy=occupancy,available=available,vacant=vacant,crowded=crowded,open_t=open_t,done=done,zone_rows=zone_rows,pending=pending)
+
+@app.get('/maintenance-dashboard')
+@login_required
+def maintenance_dashboard():
+ u=current_user()
+ if u['role'] not in ('maintenance_manager','maintenance_supervisor','housing_manager','services_manager'):abort(403)
+ where='';params=[]
+ if u['role']=='maintenance_supervisor':where='WHERE assigned_to=? OR assigned_to IS NULL';params=[u['id']]
+ with closing(conn()) as c:
+  rows=c.execute(f'SELECT * FROM maintenance_tickets {where} ORDER BY id DESC',params).fetchall()
+  by_category=c.execute(f'''SELECT category,COUNT(*) total FROM maintenance_tickets {where} GROUP BY category ORDER BY total DESC''',params).fetchall()
+  by_zone=c.execute(f'''SELECT COALESCE(zone_name,'غير محدد') zone,COUNT(*) total FROM maintenance_tickets {where} GROUP BY COALESCE(zone_name,'غير محدد') ORDER BY total DESC''',params).fetchall()
+ counts={k:sum(1 for x in rows if x['status']==k) for k in ('new','in_progress','completed','verified','closed')}
+ open_count=sum(1 for x in rows if x['status'] not in ('closed','verified'))
+ return page('''<h2>لوحة مدير الصيانة</h2><div class="cards"><div class="card"><div>إجمالي البلاغات</div><div class="num">{{rows|length}}</div></div><div class="card"><div>المفتوحة</div><div class="num">{{open_count}}</div></div><div class="card"><div>الجديدة</div><div class="num">{{counts.new}}</div></div><div class="card"><div>قيد التنفيذ</div><div class="num">{{counts.in_progress}}</div></div><div class="card"><div>المكتملة</div><div class="num">{{counts.completed}}</div></div><div class="card"><div>المغلقة/المتحققة</div><div class="num">{{counts.closed+counts.verified}}</div></div></div><div class="grid"><div class="card"><h3>حسب نوع العطل</h3>{% for x in by_category %}<p>{{x.category}} <b>{{x.total}}</b></p>{% endfor %}</div><div class="card"><h3>حسب الزون</h3>{% for x in by_zone %}<p>{{x.zone}} <b>{{x.total}}</b></p>{% endfor %}</div></div><div class="card"><h3>أحدث البلاغات</h3><div class="tbl-wrap"><table class="tbl"><tr><th>البلاغ</th><th>الموقع</th><th>التصنيف</th><th>الحالة</th><th>التاريخ</th></tr>{% for x in rows[:100] %}<tr><td><a href="{{url_for('ticket_detail',tid=x.id)}}">{{x.ticket_no}}</a></td><td>{{x.location_id}}</td><td>{{x.category}}</td><td>{{status_ar.get(x.status,x.status)}}</td><td>{{x.created_at}}</td></tr>{% endfor %}</table></div></div>''','لوحة الصيانة',u,rows=rows,counts=counts,open_count=open_count,by_category=by_category,by_zone=by_zone,status_ar=STATUS_AR)
+
 @app.get('/workers')
 @login_required
 def workers():
@@ -244,18 +262,22 @@ def new_inspection():
     cur=c.execute('INSERT INTO inspections(inspection_type,location_id,zone_name,inspector_id,registered_count,actual_count,cleanliness,notes,status,created_at,week_key) VALUES(?,?,?,?,?,?,?,?,?,?,?)',('room',room,str(room_row['zone']),u['id'],reg,int(actual or 0),clean,notes,'completed',now(),wk))
     inspection_id=cur.lastrowid;ticket_id=None
     if request.form.get('maintenance_required')=='1':
+     try: photo=save_upload(request.files.get('maintenance_photo'),'inspection')
+     except ValueError as e: photo=None; err=str(e)
      category=request.form.get('maintenance_category','أخرى');description=request.form.get('maintenance_description','').strip();priority=request.form.get('maintenance_priority','normal')
      if not description:
       c.rollback();err='اكتب وصف عطل الصيانة قبل حفظ الجولة'
+     elif not photo:
+      c.rollback();err='يجب إرفاق صورة لعطل الصيانة'
      else:
       ticket_no='MNT-'+datetime.utcnow().strftime('%Y%m%d%H%M%S%f')[-16:]
-      t=c.execute('INSERT INTO maintenance_tickets(ticket_no,location_type,location_id,zone_name,category,description,priority,status,reported_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',(ticket_no,'room',room,str(room_row['zone']),category,description,priority,'new',u['id'],now()))
-      ticket_id=t.lastrowid;c.execute('UPDATE inspections SET maintenance_ticket_id=? WHERE id=?',(ticket_id,inspection_id));c.execute('INSERT INTO ticket_updates(ticket_id,user_id,action,notes,created_at) VALUES(?,?,?,?,?)',(ticket_id,u['id'],'created_from_inspection',description,now()));audit(c,u,'create','maintenance_ticket',ticket_id,{'source':'weekly_inspection','inspection_id':inspection_id,'room_no':room})
+      t=c.execute('INSERT INTO maintenance_tickets(ticket_no,location_type,location_id,zone_name,category,description,priority,status,reported_by,before_photo,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(ticket_no,'room',room,str(room_row['zone']),category,description,priority,'new',u['id'],photo,now()))
+      ticket_id=t.lastrowid;c.execute('UPDATE inspections SET maintenance_ticket_id=? WHERE id=?',(ticket_id,inspection_id));c.execute('INSERT INTO ticket_photos(ticket_id,photo_path,photo_kind,uploaded_by,created_at) VALUES(?,?,?,?,?)',(ticket_id,photo,'report',u['id'],now()));c.execute('INSERT INTO ticket_updates(ticket_id,user_id,action,notes,photo_path,created_at) VALUES(?,?,?,?,?,?)',(ticket_id,u['id'],'created_from_inspection',description,photo,now()));audit(c,u,'create','maintenance_ticket',ticket_id,{'source':'weekly_inspection','inspection_id':inspection_id,'room_no':room})
     if not err:
      audit(c,u,'create','inspection',inspection_id,{'room_no':room,'maintenance_ticket_id':ticket_id});c.commit();return redirect(url_for('inspections'))
  return page('''<div class="card"><h2>جولة الغرفة {{room or ''}}</h2>{% if err %}<p class="err">{{err}}</p>{% endif %}{% if room_row %}<div class="cards"><div><b>الزون</b><div class="num">{{room_row.zone}}</div></div><div><b>السعة</b><div class="num">{{room_row.capacity}}</div></div><div><b>العمال المسجلون</b><div class="num">{{workers|length}}</div></div></div><h3>أسماء العمال</h3><div class="tbl-wrap"><table class="tbl"><tr><th>الرقم</th><th>الاسم</th><th>الجنسية</th><th>المهنة</th></tr>{% for w in workers %}<tr><td>{{w.employee_no}}</td><td>{{w.full_name}}</td><td>{{w.nationality}}</td><td>{{w.profession}}</td></tr>{% endfor %}{% if not workers %}<tr><td colspan="4">لا يوجد عمال مسجلون في الغرفة</td></tr>{% endif %}</table></div>{% endif %}</div>
- <div class="card"><form method="post"><input type="hidden" name="room_no" value="{{room}}"><div class="grid"><div class="field"><label>العدد الفعلي</label><input type="number" min="0" name="actual_count" value="{{workers|length}}" required></div><div class="field"><label>النظافة</label><select name="cleanliness"><option>ممتاز</option><option>جيد</option><option>يحتاج متابعة</option></select></div></div><div class="field"><label>ملاحظات الجولة</label><textarea name="notes"></textarea></div>
- <div class="card" style="border:1px solid #d8dddd"><h3>الصيانة داخل الجولة</h3><label><input type="checkbox" name="maintenance_required" value="1" onchange="document.getElementById('maintenance-fields').style.display=this.checked?'grid':'none'"> يوجد عطل صيانة ويحتاج إنشاء بلاغ</label><div id="maintenance-fields" class="grid" style="display:none;margin-top:12px"><div class="field"><label>التصنيف</label><select name="maintenance_category"><option>كهرباء</option><option>سباكة</option><option>تكييف</option><option>نجارة</option><option>أثاث</option><option>أبواب ونوافذ</option><option>أخرى</option></select></div><div class="field"><label>الأولوية</label><select name="maintenance_priority"><option value="normal">عادي</option><option value="urgent">عاجل</option><option value="critical">طارئ</option></select></div><div class="field" style="grid-column:1/-1"><label>وصف العطل</label><textarea name="maintenance_description"></textarea></div></div></div><button class="btn">حفظ الجولة</button></form></div>''','جولة غرفة',u,room=room,err=err,room_row=room_row,workers=workers)
+ <div class="card"><form method="post" enctype="multipart/form-data"><input type="hidden" name="room_no" value="{{room}}"><div class="grid"><div class="field"><label>العدد الفعلي</label><input type="number" min="0" name="actual_count" value="{{workers|length}}" required></div><div class="field"><label>النظافة</label><select name="cleanliness"><option>ممتاز</option><option>جيد</option><option>يحتاج متابعة</option></select></div></div><div class="field"><label>ملاحظات الجولة</label><textarea name="notes"></textarea></div>
+ <div class="card" style="border:1px solid #d8dddd"><h3>الصيانة داخل الجولة</h3><label><input type="checkbox" name="maintenance_required" value="1" onchange="document.getElementById('maintenance-fields').style.display=this.checked?'grid':'none'"> يوجد عطل صيانة ويحتاج إنشاء بلاغ</label><div id="maintenance-fields" class="grid" style="display:none;margin-top:12px"><div class="field"><label>التصنيف</label><select name="maintenance_category"><option>كهرباء</option><option>سباكة</option><option>تكييف</option><option>نجارة</option><option>أثاث</option><option>أبواب ونوافذ</option><option>أخرى</option></select></div><div class="field"><label>الأولوية</label><select name="maintenance_priority"><option value="normal">عادي</option><option value="urgent">عاجل</option><option value="critical">طارئ</option></select></div><div class="field"><label>صورة العطل</label><input type="file" name="maintenance_photo" accept="image/*" capture="environment"></div><div class="field" style="grid-column:1/-1"><label>وصف العطل</label><textarea name="maintenance_description"></textarea></div></div></div><button class="btn">حفظ الجولة</button></form></div>''','جولة غرفة',u,room=room,err=err,room_row=room_row,workers=workers)
 
 @app.get('/bathroom-inspections')
 @login_required
@@ -370,7 +392,7 @@ def new_worker_change_request():
     elif c.execute('SELECT 1 FROM workers WHERE employee_no=? AND archived=0',(eno,)).fetchone():err='الرقم الوظيفي موجود مسبقًا'
     else:
      req='WCR-'+datetime.utcnow().strftime('%Y%m%d%H%M%S%f')[-16:]
-     cur=c.execute('''INSERT INTO worker_change_requests(request_no,change_type,employee_no,iqama_no,full_name,nationality,profession,zone,room_no,reason,requested_by,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',(req,'add',eno,request.form.get('iqama_no','').strip(),request.form.get('full_name','').strip(),request.form.get('nationality','').strip(),request.form.get('profession','').strip(),str(room['zone']),room_no,reason,u['id'],'pending',now()))
+     cur=c.execute('''INSERT INTO worker_change_requests(request_no,change_type,employee_no,iqama_no,full_name,nationality,profession,zone,room_no,reason,requested_by,status,created_at,kit_bed,kit_mattress,kit_pillow,kit_sheet,kit_blanket) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(req,'add',eno,request.form.get('iqama_no','').strip(),request.form.get('full_name','').strip(),request.form.get('nationality','').strip(),request.form.get('profession','').strip(),str(room['zone']),room_no,reason,u['id'],'pending',now(),int(bool(request.form.get('kit_bed'))),int(bool(request.form.get('kit_mattress'))),int(bool(request.form.get('kit_pillow'))),int(bool(request.form.get('kit_sheet'))),int(bool(request.form.get('kit_blanket')))))
      audit(c,u,'create','worker_change_request',cur.lastrowid,{'type':'add','employee_no':eno});c.commit();return redirect(url_for('worker_change_request_detail',qid=cur.lastrowid))
    else:
     worker=c.execute('SELECT * FROM workers WHERE employee_no=? AND archived=0',(eno,)).fetchone()
@@ -382,7 +404,7 @@ def new_worker_change_request():
       req='WCR-'+datetime.utcnow().strftime('%Y%m%d%H%M%S%f')[-16:]
       cur=c.execute('''INSERT INTO worker_change_requests(request_no,change_type,worker_id,employee_no,iqama_no,full_name,nationality,profession,zone,room_no,reason,requested_by,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(req,'delete',worker['id'],worker['employee_no'],worker['iqama_no'],worker['full_name'],worker['nationality'],worker['profession'],worker['zone'],worker['room_no'],reason,u['id'],'pending',now()))
       audit(c,u,'create','worker_change_request',cur.lastrowid,{'type':'delete','worker_id':worker['id']});c.commit();return redirect(url_for('worker_change_request_detail',qid=cur.lastrowid))
- return page('''<div class="card"><h2>طلب إضافة أو حذف عامل</h2>{% if err %}<p class="err">{{err}}</p>{% endif %}<form method="post"><div class="grid"><div class="field"><label>نوع الطلب</label><select name="change_type"><option value="add" {% if typ=='add' %}selected{% endif %}>إضافة عامل جديد</option><option value="delete" {% if typ=='delete' %}selected{% endif %}>حذف/أرشفة عامل</option></select></div><div class="field"><label>الرقم الوظيفي</label><input name="employee_no" required></div><div class="field"><label>رقم الإقامة (للإضافة)</label><input name="iqama_no"></div><div class="field"><label>اسم العامل (للإضافة)</label><input name="full_name"></div><div class="field"><label>الجنسية (للإضافة)</label><input name="nationality"></div><div class="field"><label>المهنة (للإضافة)</label><input name="profession"></div><div class="field"><label>رقم الغرفة (للإضافة)</label><input name="room_no"></div></div><div class="field"><label>سبب الطلب</label><textarea name="reason" required></textarea></div><button class="btn">إرسال لمدير السكن</button></form></div>''','طلب إضافة/حذف عامل',u,err=err,typ=typ)
+ return page('''<div class="card"><h2>طلب إضافة أو حذف عامل</h2>{% if err %}<p class="err">{{err}}</p>{% endif %}<form method="post"><div class="grid"><div class="field"><label>نوع الطلب</label><select name="change_type"><option value="add" {% if typ=='add' %}selected{% endif %}>إضافة عامل جديد</option><option value="delete" {% if typ=='delete' %}selected{% endif %}>حذف/أرشفة عامل</option></select></div><div class="field"><label>الرقم الوظيفي</label><input name="employee_no" required></div><div class="field"><label>رقم الإقامة (للإضافة)</label><input name="iqama_no"></div><div class="field"><label>اسم العامل (للإضافة)</label><input name="full_name"></div><div class="field"><label>الجنسية (للإضافة)</label><input name="nationality"></div><div class="field"><label>المهنة (للإضافة)</label><input name="profession"></div><div class="field"><label>رقم الغرفة (للإضافة)</label><input name="room_no"></div></div><div class="card"><h3>مستلزمات التسكين</h3><label><input type="checkbox" name="kit_bed" checked> السرير</label> <label><input type="checkbox" name="kit_mattress" checked> المرتبة</label> <label><input type="checkbox" name="kit_pillow" checked> المخدة</label> <label><input type="checkbox" name="kit_sheet" checked> الشرشف</label> <label><input type="checkbox" name="kit_blanket" checked> البطانية</label></div><div class="field"><label>سبب الطلب</label><textarea name="reason" required></textarea></div><button class="btn">إرسال لمدير السكن</button></form></div>''','طلب إضافة/حذف عامل',u,err=err,typ=typ)
 
 @app.route('/worker-change-requests/<int:qid>',methods=['GET','POST'])
 @login_required
@@ -405,11 +427,40 @@ def worker_change_request_detail(qid):
      occupied=c.execute('SELECT COUNT(*) FROM workers WHERE room_no=? AND archived=0',(q['room_no'],)).fetchone()[0]
      if occupied>=room['capacity']:return page('<div class="card"><p class="err">الغرفة ممتلئة.</p></div>','خطأ',u),400
      cur=c.execute('''INSERT INTO workers(employee_no,iqama_no,full_name,nationality,profession,zone,room_no,status,archived,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)''',(q['employee_no'],q['iqama_no'],q['full_name'],q['nationality'],q['profession'],q['zone'],q['room_no'],'active',0,now(),now()))
-     c.execute('UPDATE worker_change_requests SET worker_id=? WHERE id=?',(cur.lastrowid,qid))
+     c.execute('UPDATE worker_change_requests SET worker_id=? WHERE id=?',(cur.lastrowid,qid)); c.execute('INSERT INTO housing_kit_deliveries(worker_id,bed,mattress,pillow,sheet,blanket,delivered_by,notes,delivered_at) VALUES(?,?,?,?,?,?,?,?,?)',(cur.lastrowid,q['kit_bed'],q['kit_mattress'],q['kit_pillow'],q['kit_sheet'],q['kit_blanket'],q['requested_by'],'تم التسجيل ضمن طلب التسكين الجديد',now()))
     else:
      c.execute("UPDATE workers SET archived=1,status='archived',updated_at=? WHERE id=?",(now(),q['worker_id']))
    c.execute('UPDATE worker_change_requests SET status=?,decided_by=?,decision_reason=?,decided_at=? WHERE id=?',(decision,u['id'],reason,now(),qid));audit(c,u,decision,'worker_change_request',qid,{'reason':reason});c.commit();return redirect(url_for('worker_change_request_detail',qid=qid))
  return page('''<div class="card"><h2>طلب {{q.request_no}}</h2><p><b>النوع:</b> {{'إضافة عامل جديد' if q.change_type=='add' else 'حذف/أرشفة عامل'}}</p><p><b>العامل:</b> {{q.employee_no}} - {{q.full_name}}</p><p><b>الإقامة:</b> {{q.iqama_no or '-'}}</p><p><b>الغرفة:</b> {{q.room_no}}</p><p><b>مقدم الطلب:</b> {{q.requester}}</p><p><b>السبب:</b> {{q.reason}}</p><p><b>الحالة:</b> {{status_ar.get(q.status,q.status)}}</p>{% if can_decide and q.status=='pending' %}<form method="post"><textarea name="decision_reason" placeholder="ملاحظة القرار"></textarea><br><button class="btn" name="decision" value="approved">اعتماد وتنفيذ</button> <button class="btn danger" name="decision" value="rejected">رفض</button></form>{% endif %}</div>''','تفاصيل الطلب',u,q=q,status_ar=STATUS_AR,can_decide=u['role'] in ('housing_manager','services_manager'))
+
+@app.get('/housing-kit')
+@login_required
+def housing_kit_list():
+ u=current_user()
+ if u['role'] not in ('housing_supervisor','housing_monitor','housing_manager','services_manager'):abort(403)
+ cl,args=assigned_clause(u,'r') if u['role']=='housing_supervisor' else ('1=1',[])
+ with closing(conn()) as c:rows=c.execute(f'''SELECT w.id,w.employee_no,w.full_name,w.zone,w.room_no,k.bed,k.mattress,k.pillow,k.sheet,k.blanket,k.delivered_at,du.display_name delivered_name FROM workers w JOIN rooms r ON r.room_no=w.room_no LEFT JOIN housing_kit_deliveries k ON k.id=(SELECT id FROM housing_kit_deliveries WHERE worker_id=w.id ORDER BY id DESC LIMIT 1) LEFT JOIN users du ON du.id=k.delivered_by WHERE w.archived=0 AND {cl} ORDER BY CAST(w.room_no AS INTEGER),w.full_name LIMIT 500''',args).fetchall()
+ return page('''<h2>تسليم مستلزمات السكن</h2><div class="tbl-wrap"><table class="tbl"><tr><th>العامل</th><th>الغرفة</th><th>سرير</th><th>مرتبة</th><th>مخدة</th><th>شرشف</th><th>بطانية</th><th></th></tr>{% for x in rows %}<tr><td>{{x.employee_no}} - {{x.full_name}}</td><td>{{x.zone}} / {{x.room_no}}</td><td>{{'✓' if x.bed else '—'}}</td><td>{{'✓' if x.mattress else '—'}}</td><td>{{'✓' if x.pillow else '—'}}</td><td>{{'✓' if x.sheet else '—'}}</td><td>{{'✓' if x.blanket else '—'}}</td><td><a href="{{url_for('housing_kit_worker',wid=x.id)}}">تسجيل/تعديل</a></td></tr>{% endfor %}</table></div>''','مستلزمات السكن',u,rows=rows)
+
+@app.route('/workers/<int:wid>/housing-kit',methods=['GET','POST'])
+@login_required
+def housing_kit_worker(wid):
+ u=current_user()
+ if u['role'] not in ('housing_supervisor','housing_monitor','housing_manager','services_manager'):abort(403)
+ with closing(conn()) as c:
+  w=c.execute('SELECT w.*,r.id room_id FROM workers w JOIN rooms r ON r.room_no=w.room_no WHERE w.id=? AND w.archived=0',(wid,)).fetchone()
+  if not w:abort(404)
+  if u['role']=='housing_supervisor':
+   cl,args=assigned_clause(u,'r')
+   if not c.execute(f'SELECT 1 FROM rooms r WHERE r.room_no=? AND {cl}',[w['room_no']]+args).fetchone():abort(403)
+  if request.method=='POST':
+   c.execute('INSERT INTO housing_kit_deliveries(worker_id,bed,mattress,pillow,sheet,blanket,delivered_by,notes,delivered_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',(wid,int(bool(request.form.get('bed'))),int(bool(request.form.get('mattress'))),int(bool(request.form.get('pillow'))),int(bool(request.form.get('sheet'))),int(bool(request.form.get('blanket'))),u['id'],request.form.get('notes',''),now(),now()));audit(c,u,'update','housing_kit',wid);c.commit();return redirect(url_for('housing_kit_list'))
+  k=c.execute('SELECT * FROM housing_kit_deliveries WHERE worker_id=? ORDER BY id DESC LIMIT 1',(wid,)).fetchone()
+ return page('''<div class="card"><h2>مستلزمات {{w.full_name}}</h2><p>{{w.employee_no}} — الغرفة {{w.room_no}}</p><form method="post"><div class="grid"><label><input type="checkbox" name="bed" {% if k and k.bed %}checked{% endif %}> السرير</label><label><input type="checkbox" name="mattress" {% if k and k.mattress %}checked{% endif %}> المرتبة</label><label><input type="checkbox" name="pillow" {% if k and k.pillow %}checked{% endif %}> المخدة</label><label><input type="checkbox" name="sheet" {% if k and k.sheet %}checked{% endif %}> الشرشف</label><label><input type="checkbox" name="blanket" {% if k and k.blanket %}checked{% endif %}> البطانية</label></div><textarea name="notes" placeholder="ملاحظات"></textarea><br><button class="btn">حفظ التسليم</button></form></div>''','مستلزمات العامل',u,w=w,k=k)
+
+@app.get('/uploads/<path:filename>')
+@login_required
+def uploaded_file(filename):return send_from_directory(UPLOAD_DIR,filename)
 
 @app.get('/tickets')
 @login_required
@@ -422,12 +473,17 @@ def tickets():
 @app.route('/tickets/new',methods=['GET','POST'])
 @login_required
 def new_ticket():
- u=current_user()
+ u=current_user();err=''
  if request.method=='POST':
-  no='MNT-'+datetime.utcnow().strftime('%Y%m%d%H%M%S%f')[-16:]
-  with closing(conn()) as c:
-   cur=c.execute('INSERT INTO maintenance_tickets(ticket_no,location_type,location_id,zone_name,category,description,priority,status,reported_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',(no,request.form['location_type'],request.form['location_id'],request.form.get('zone_name',''),request.form['category'],request.form.get('description',''),request.form['priority'],'new',u['id'],now()));c.execute('INSERT INTO ticket_updates(ticket_id,user_id,action,notes,created_at) VALUES(?,?,?,?,?)',(cur.lastrowid,u['id'],'created',request.form.get('description',''),now()));audit(c,u,'create','maintenance_ticket',cur.lastrowid);c.commit();return redirect(url_for('ticket_detail',tid=cur.lastrowid))
- return page('''<div class="card"><h2>بلاغ صيانة جديد</h2><form method="post"><div class="grid"><div class="field"><label>نوع الموقع</label><select name="location_type"><option value="room">غرفة</option><option value="bathroom">دورة مياه</option><option value="corridor">ممر</option><option value="kitchen">مطبخ</option><option value="other">أخرى</option></select></div><div class="field"><label>رقم/اسم الموقع</label><input name="location_id" required></div><div class="field"><label>الزون</label><input name="zone_name"></div><div class="field"><label>التصنيف</label><select name="category"><option>كهرباء</option><option>سباكة</option><option>تكييف</option><option>نجارة</option><option>مولدات</option><option>أخرى</option></select></div><div class="field"><label>الأولوية</label><select name="priority"><option value="normal">عادي</option><option value="urgent">عاجل</option><option value="critical">طارئ</option></select></div></div><div class="field"><label>الوصف</label><textarea name="description" required></textarea></div><button class="btn">إرسال البلاغ</button></form></div>''','بلاغ جديد',u)
+  try:photo=save_upload(request.files.get('photo'),'ticket')
+  except ValueError as e:err=str(e);photo=None
+  if not photo:err=err or 'يجب إرفاق صورة مع البلاغ'
+  if not err:
+   no='MNT-'+datetime.utcnow().strftime('%Y%m%d%H%M%S%f')[-16:]
+   with closing(conn()) as c:
+    cur=c.execute('INSERT INTO maintenance_tickets(ticket_no,location_type,location_id,zone_name,category,description,priority,status,reported_by,before_photo,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(no,request.form['location_type'],request.form['location_id'],request.form.get('zone_name',''),request.form['category'],request.form.get('description',''),request.form['priority'],'new',u['id'],photo,now()))
+    c.execute('INSERT INTO ticket_photos(ticket_id,photo_path,photo_kind,uploaded_by,created_at) VALUES(?,?,?,?,?)',(cur.lastrowid,photo,'report',u['id'],now()));c.execute('INSERT INTO ticket_updates(ticket_id,user_id,action,notes,photo_path,created_at) VALUES(?,?,?,?,?,?)',(cur.lastrowid,u['id'],'created',request.form.get('description',''),photo,now()));audit(c,u,'create','maintenance_ticket',cur.lastrowid);c.commit();return redirect(url_for('ticket_detail',tid=cur.lastrowid))
+ return page('''<div class="card"><h2>بلاغ صيانة جديد</h2>{% if err %}<p class="err">{{err}}</p>{% endif %}<form method="post" enctype="multipart/form-data"><div class="grid"><div class="field"><label>نوع الموقع</label><select name="location_type"><option value="room">غرفة</option><option value="bathroom">دورة مياه</option><option value="corridor">ممر</option><option value="kitchen">مطبخ</option><option value="other">أخرى</option></select></div><div class="field"><label>رقم/اسم الموقع</label><input name="location_id" required></div><div class="field"><label>الزون</label><input name="zone_name"></div><div class="field"><label>التصنيف</label><select name="category"><option>كهرباء</option><option>سباكة</option><option>تكييف</option><option>نجارة</option><option>مولدات</option><option>أخرى</option></select></div><div class="field"><label>الأولوية</label><select name="priority"><option value="normal">عادي</option><option value="urgent">عاجل</option><option value="critical">طارئ</option></select></div><div class="field"><label>صورة البلاغ (إلزامية)</label><input type="file" name="photo" accept="image/*" capture="environment" required></div></div><div class="field"><label>الوصف</label><textarea name="description" required></textarea></div><button class="btn">إرسال البلاغ</button></form></div>''','بلاغ جديد',u,err=err)
 @app.route('/tickets/<int:tid>',methods=['GET','POST'])
 @login_required
 def ticket_detail(tid):
@@ -444,8 +500,8 @@ def ticket_detail(tid):
    if timecol:sql+=f',{timecol}=?';params.append(now())
    sql+=' WHERE id=?';params.append(tid);c.execute(sql,params);c.execute('INSERT INTO ticket_updates(ticket_id,user_id,action,notes,created_at) VALUES(?,?,?,?,?)',(tid,u['id'],status,notes,now()));audit(c,u,status,'maintenance_ticket',tid);c.commit();return redirect(url_for('ticket_detail',tid=tid))
   maintenance_users=c.execute("SELECT id,display_name FROM users WHERE active=1 AND role IN ('maintenance_manager','maintenance_supervisor') ORDER BY role,display_name").fetchall()
-  updates=c.execute('''SELECT x.*,u.display_name FROM ticket_updates x LEFT JOIN users u ON u.id=x.user_id WHERE x.ticket_id=? ORDER BY x.id DESC''',(tid,)).fetchall()
- return page('''<div class="card"><h2>بلاغ {{t.ticket_no}}</h2><p><b>الموقع:</b> {{t.location_type}} {{t.location_id}}</p><p><b>التصنيف:</b> {{t.category}}</p><p><b>الوصف:</b> {{t.description}}</p><p><b>الحالة:</b> {{status_ar.get(t.status,t.status)}}</p>{% if can_update %}<form method="post"><div class="field"><label>إسناد البلاغ</label><select name="assigned_to"><option value="">غير مسند</option>{% for m in maintenance_users %}<option value="{{m.id}}" {% if t.assigned_to==m.id %}selected{% endif %}>{{m.display_name}}</option>{% endfor %}</select></div><select name="status"><option value="in_progress">قيد التنفيذ</option><option value="completed">مكتمل</option><option value="verified">تم التحقق</option><option value="closed">مغلق</option></select><input name="technician_name" placeholder="اسم الفني"><textarea name="notes" placeholder="ملاحظات التنفيذ"></textarea><button class="btn">تحديث</button></form>{% endif %}</div><div class="card"><h3>سجل التحديثات</h3><table class="tbl">{% for x in updates %}<tr><td>{{x.created_at}}</td><td>{{x.display_name}}</td><td>{{status_ar.get(x.action,x.action)}}</td><td>{{x.notes}}</td></tr>{% endfor %}</table></div>''','تفاصيل البلاغ',u,t=t,updates=updates,status_ar=STATUS_AR,can_update=can_maintenance(u),maintenance_users=maintenance_users)
+  updates=c.execute('''SELECT x.*,u.display_name FROM ticket_updates x LEFT JOIN users u ON u.id=x.user_id WHERE x.ticket_id=? ORDER BY x.id DESC''',(tid,)).fetchall(); photos=c.execute('SELECT * FROM ticket_photos WHERE ticket_id=? ORDER BY id',(tid,)).fetchall()
+ return page('''<div class="card"><h2>بلاغ {{t.ticket_no}}</h2><p><b>الموقع:</b> {{t.location_type}} {{t.location_id}}</p><p><b>التصنيف:</b> {{t.category}}</p><p><b>الوصف:</b> {{t.description}}</p><p><b>الحالة:</b> {{status_ar.get(t.status,t.status)}}</p>{% if photos %}<div class="grid">{% for p in photos %}<a href="{{url_for('uploaded_file',filename=p.photo_path)}}" target="_blank"><img src="{{url_for('uploaded_file',filename=p.photo_path)}}" style="width:100%;max-height:240px;object-fit:cover;border-radius:10px"></a>{% endfor %}</div>{% endif %}{% if can_update %}<form method="post"><div class="field"><label>إسناد البلاغ</label><select name="assigned_to"><option value="">غير مسند</option>{% for m in maintenance_users %}<option value="{{m.id}}" {% if t.assigned_to==m.id %}selected{% endif %}>{{m.display_name}}</option>{% endfor %}</select></div><select name="status"><option value="in_progress">قيد التنفيذ</option><option value="completed">مكتمل</option><option value="verified">تم التحقق</option><option value="closed">مغلق</option></select><input name="technician_name" placeholder="اسم الفني"><textarea name="notes" placeholder="ملاحظات التنفيذ"></textarea><button class="btn">تحديث</button></form>{% endif %}</div><div class="card"><h3>سجل التحديثات</h3><table class="tbl">{% for x in updates %}<tr><td>{{x.created_at}}</td><td>{{x.display_name}}</td><td>{{status_ar.get(x.action,x.action)}}</td><td>{{x.notes}}</td></tr>{% endfor %}</table></div>''','تفاصيل البلاغ',u,t=t,updates=updates,status_ar=STATUS_AR,can_update=can_maintenance(u),maintenance_users=maintenance_users,photos=photos)
 
 @app.get('/users')
 @login_required

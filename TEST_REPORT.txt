@@ -1,15 +1,15 @@
-MAG CAMP Phase 4.1 Beta — Test Report
-Date: 2026-07-19
-
-Automated tests: 18/18 PASSED
+MAG CAMP Phase 4.2 Beta
+========================
+Automated tests: 21
+Passed: 21
+Failed: 0
 
 Verified:
-- Existing Phase 3 and Phase 4.0 functions remain operational.
-- Supervisor weekly-round page shows only assigned rooms.
-- Worker names are displayed for assigned rooms.
-- Supervisor cannot access rooms outside assignment.
-- A maintenance ticket can be created and linked from a weekly room inspection.
-- Bathroom reports still create standalone maintenance tickets.
-- Worker add/delete approval workflow remains operational.
+- Existing Phase 3/4.0/4.1 functions remain operational.
+- Role-based supervisor room scope.
+- Weekly rounds and linked maintenance tickets.
+- Maintenance dashboard access.
+- Housing-kit access for supervisors.
+- Maintenance ticket photo requirement.
+- Worker add approval workflow.
 - Amir Suhail account remains active.
-- Users and audit log remain restricted from supervisors.

@@ -1,5 +1,6 @@
 import os
 import shutil
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -58,6 +59,12 @@ class MagCampPhase1Tests(unittest.TestCase):
             c.close()
 
     def test_manager_login_forces_password_change(self):
+        c = magcamp.conn()
+        try:
+            c.execute("UPDATE users SET must_change_password=1 WHERE employee_no=\'109753\'")
+            c.commit()
+        finally:
+            c.close()
         response = self.login("109753")
         self.assertEqual(response.status_code, 302)
         self.assertTrue(response.headers["Location"].endswith("/change-password"))
@@ -121,7 +128,7 @@ class MagCampPhase1Tests(unittest.TestCase):
         self.authenticate_without_forced_change("109753")
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("لوحة التحكم التنفيذية".encode("utf-8"), response.data)
+        self.assertIn("لوحة مدير السكن والخدمات المساندة".encode("utf-8"), response.data)
 
     def test_phase3_room_detail(self):
         self.authenticate_without_forced_change("109753")
@@ -230,8 +237,9 @@ class MagCampPhase1Tests(unittest.TestCase):
             "room_no": room, "actual_count": "4", "cleanliness": "جيد",
             "notes": "جولة اختبار 4.1", "maintenance_required": "1",
             "maintenance_category": "تكييف", "maintenance_priority": "urgent",
-            "maintenance_description": "عطل تكييف من الجولة"
-        }, follow_redirects=False)
+            "maintenance_description": "عطل تكييف من الجولة",
+            "maintenance_photo": (io.BytesIO(b"fake-image"), "issue.jpg")
+        }, content_type="multipart/form-data", follow_redirects=False)
         self.assertEqual(response.status_code, 302)
         c = magcamp.conn()
         try:
@@ -245,6 +253,27 @@ class MagCampPhase1Tests(unittest.TestCase):
         finally:
             c.close()
 
+
+    def test_phase42_maintenance_dashboard(self):
+        self.authenticate_without_forced_change("109753")
+        response = self.client.get("/maintenance-dashboard")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("لوحة مدير الصيانة".encode("utf-8"), response.data)
+
+    def test_phase42_housing_kit_access(self):
+        self.authenticate_without_forced_change("149867")
+        response = self.client.get("/housing-kit")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("تسليم مستلزمات السكن".encode("utf-8"), response.data)
+
+    def test_phase42_ticket_requires_photo(self):
+        self.authenticate_without_forced_change("149867")
+        response = self.client.post("/tickets/new", data={
+            "location_type":"room","location_id":"2413","zone_name":"2",
+            "category":"كهرباء","description":"اختبار صورة","priority":"normal"
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("يجب إرفاق صورة".encode("utf-8"), response.data)
 
 if __name__ == "__main__":
     unittest.main()
