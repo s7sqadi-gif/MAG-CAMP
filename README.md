@@ -24,3 +24,10 @@ python app.py
 ## ملاحظة مهمة للنشر
 
 حافظ على مجلد `uploads` كمساحة تخزين دائمة في بيئة الإنتاج حتى لا تضيع صور البلاغات عند إعادة النشر.
+
+## Enterprise Phase 4.5 additions
+- Language selection is shown before sign-in. Every user chooses Arabic or English.
+- Existing production data is preserved through additive SQLite migrations.
+- New housing requests require profession and mobile number and include housing-kit delivery.
+- Historical timelines intentionally start with new system operations; no legacy dates are invented.
+- New routes: `/occupancy-management`, `/occupancy-map`, `/notifications`, `/workers/<id>`.

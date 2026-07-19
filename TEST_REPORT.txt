@@ -1,15 +1,18 @@
-MAG CAMP Phase 4.2 Beta
-========================
-Automated tests: 21
-Passed: 21
-Failed: 0
+MAG CAMP Enterprise Phase 4.5
+Build date: 2026-07-19
 
-Verified:
-- Existing Phase 3/4.0/4.1 functions remain operational.
-- Role-based supervisor room scope.
-- Weekly rounds and linked maintenance tickets.
-- Maintenance dashboard access.
-- Housing-kit access for supervisors.
-- Maintenance ticket photo requirement.
-- Worker add approval workflow.
-- Amir Suhail account remains active.
+Automated regression tests: 21 passed
+Python compile: passed
+Database migration: additive only (no tables dropped or recreated)
+
+Implemented in this build:
+- Language selection screen before login (Arabic / English)
+- Dynamic RTL/LTR shell and translated login/navigation
+- Occupancy Management page
+- Color-coded Occupancy Map
+- New housing fields: mobile number and profession
+- Housing kit recorded only through approved new housing workflow
+- Worker timeline for new operations
+- Room Control Center additions (maintenance and inspection history)
+- Notifications center
+- Audit logs remain prospective; no fabricated historical dates
