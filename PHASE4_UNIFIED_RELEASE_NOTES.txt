@@ -1,0 +1,39 @@
+MAG CAMP — Phase 4 Unified Build
+Date: 2026-07-19
+
+This package combines the approved Phase 4 development with the mobile navigation fix in one project.
+
+Included:
+- Mobile responsive navigation fix; removes the large blank area above dashboard content.
+- Manager and supervisor dashboards.
+- Balanced geographic room ownership across 11 supervisors.
+- Management rooms 3801–3816 excluded from supervisor ownership when present.
+- Room classification and clickable room-type statistics.
+- Sector dashboard and inspection route.
+- Room inspections.
+- Four bathroom complexes with numbered toilets and basins.
+- Bathroom/basin inspection history and maintenance ticket creation.
+- New housing, transfer and checkout/removal approval workflows.
+- Worker absence reporting and manager follow-up.
+- Room history and worker history.
+- Global search for workers, employee/iqama numbers, rooms, maintenance tickets and absence reports.
+- Role-based access restrictions.
+- Existing production database and backup retained; schema migrations are additive only.
+
+Verification performed on a temporary copy of the database:
+- Python syntax compilation: PASS.
+- Flask schema migration/import: PASS.
+- Manager dashboard: PASS.
+- Global search: PASS.
+- Rooms: PASS.
+- Workers: PASS.
+- Sector and inspections: PASS.
+- Housing workflows list: PASS.
+- Absence reports: PASS.
+- Maintenance tickets: PASS.
+- Mobile navigation includes Phase 4 operational links: PASS.
+
+Important:
+- This package was not deployed to the live Render service.
+- Deploy first against a copy/staging database and preserve DATABASE_PATH and uploads storage.
+- Some legacy tests in tests/test_app.py assert old supervisor room ranges and are no longer valid after the approved balanced assignment model.

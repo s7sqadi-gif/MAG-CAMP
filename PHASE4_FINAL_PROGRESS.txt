@@ -32,3 +32,11 @@ Verification:
 Notes:
 - Legacy tests that assert old explicit room ranges no longer apply because the approved Phase 4 requirement replaces those ranges with balanced geographic ownership.
 - Final user acceptance testing should be done on a copy of production before deployment.
+
+Mobile UI fix — 2026-07-19:
+- Replaced the multi-row mobile navigation grid with a compact single-row horizontal navigation bar.
+- Removed the large empty white navigation area shown on iPhone screens.
+- Reduced mobile header height and aligned page content directly below navigation.
+- Added small-screen refinements for dashboard cards and very narrow devices.
+- Python compilation: PASS.
+- Phase 4.6 workflow tests: 5/5 PASS.
