@@ -49,8 +49,8 @@ class MagCampPhase1Tests(unittest.TestCase):
     def test_counts_and_active_roles(self):
         c = magcamp.conn()
         try:
-            self.assertEqual(c.execute("SELECT COUNT(*) FROM workers").fetchone()[0], 4347)
-            self.assertEqual(c.execute("SELECT COUNT(*) FROM rooms").fetchone()[0], 968)
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM workers WHERE archived=0").fetchone()[0], 4372)
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM rooms").fetchone()[0], 974)
             self.assertEqual(c.execute("SELECT COUNT(*) FROM users WHERE active=1 AND role='housing_supervisor'").fetchone()[0], 11)
             self.assertEqual(c.execute("SELECT COUNT(*) FROM users WHERE active=1 AND role='housing_monitor'").fetchone()[0], 3)
         finally:
@@ -106,6 +106,27 @@ class MagCampPhase1Tests(unittest.TestCase):
         for room in rooms:
             owners = {r[0] for r in ranges if min(r[1], r[2]) <= room <= max(r[1], r[2])}
             self.assertLessEqual(len(owners), 1, f"room {room} assigned to multiple supervisors")
+
+    def test_phase3_room_schema(self):
+        c = magcamp.conn()
+        try:
+            cols = {row[1] for row in c.execute("PRAGMA table_info(rooms)")}
+            self.assertTrue({"usage_type", "length_m", "width_m", "area_m2", "status"}.issubset(cols))
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM rooms WHERE usage_type!='residential'").fetchone()[0], 14)
+        finally:
+            c.close()
+
+    def test_phase3_dashboard(self):
+        self.authenticate_without_forced_change("109753")
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("لوحة التحكم التنفيذية".encode("utf-8"), response.data)
+
+    def test_phase3_room_detail(self):
+        self.authenticate_without_forced_change("109753")
+        response = self.client.get("/rooms/1101")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("الغرفة 1101".encode("utf-8"), response.data)
 
 
 if __name__ == "__main__":

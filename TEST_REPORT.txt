@@ -1,39 +1,17 @@
-MAG CAMP — PHASE 2 VERIFICATION REPORT
-Date: 2026-07-17
+MAG CAMP Phase 3 Foundation v3.0 Beta
+Date: 2026-07-19
 
-Compatibility and database safety
-- Built directly on the verified Phase 1 database.
-- Phase 1 core tables preserved: users, assignments, rooms, workers.
-- Migration is additive only: CREATE TABLE IF NOT EXISTS and ALTER TABLE ADD COLUMN.
-- No DROP TABLE, destructive recreation, or bulk deletion.
-- SQLite integrity_check: OK.
-- Core record counts after migration: 19 users, 968 rooms, 4,347 workers, 12 assignment rows.
+Automated tests: 11 passed / 11
 
-Functional tests passed
-1. Health endpoint and database connection.
-2. Manager dashboard.
-3. Workers and rooms pages.
-4. Weekly room inspection creation.
-5. Bathroom inspection creation.
-6. Worker request creation by an active housing monitor.
-7. Automatic responsible-supervisor lookup from current room.
-8. Request approval and automatic worker-status execution.
-9. Maintenance ticket creation.
-10. Maintenance workflow update by maintenance management.
-11. User-role access control.
-12. Audit log recording.
-13. Gunicorn startup with 2 workers.
-
-Phase 2 modules
-- Weekly room inventory/inspection.
-- Bathroom inspections.
-- Worker transfer requests.
-- Final exit requests.
-- Temporary outside housing with dates.
-- Permanent outside housing.
-- Automatic supervisor routing.
-- Maintenance tickets and status workflow.
-- Manager audit log.
-
-Deployment
-Upload every file from the ZIP directly to the GitHub repository root.
+Verified:
+- Health endpoint reports Phase 3.
+- Existing login and forced password-change flow.
+- Manager and supervisor permissions.
+- Supervisor room-range isolation.
+- No overlapping supervisor room assignments.
+- Phase 3 room schema and special room usages.
+- Executive dashboard renders.
+- Unified room page renders.
+- Latest Excel data imported: 4,372 active workers.
+- Total rooms after import: 974.
+- Phase 2 database backup included.
