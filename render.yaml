@@ -3,8 +3,8 @@ services:
     name: mag-camp
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --workers 2 --threads 4 --timeout 120 app:app
+    buildCommand: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+    startCommand: gunicorn --workers 2 --threads 4 --timeout 120 --access-logfile - --error-logfile - wsgi:app
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
