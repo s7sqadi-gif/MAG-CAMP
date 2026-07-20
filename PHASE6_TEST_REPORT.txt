@@ -1,0 +1,9 @@
+Phase 6 smoke tests: PASSED
+- Manager workers page: 200
+- Reports center: 200
+- Absence reports page: 200
+- Backup page: 200
+- Excel export: valid XLSX (PK signature), 4372 worker records + header, 17 columns
+- PDF export: valid PDF, 71 pages, visually rendered and verified
+- Export permission for housing supervisor: denied (403)
+- New absence report form: 200
