@@ -1,0 +1,4 @@
+Render deployment fix:
+- Added .python-version with Python 3.12.11.
+- Updated render.yaml PYTHON_VERSION to 3.12.11.
+Reason: Render was building with Python 3.14, causing python-bidi package metadata generation to fail.

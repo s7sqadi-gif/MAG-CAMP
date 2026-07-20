@@ -1,18 +1,1 @@
-MAG CAMP — Phase 5 Unified Progress
-Date: 2026-07-19
-
-Implemented in this checkpoint:
-- Removed Occupancy Map from desktop and mobile navigation.
-- Legacy /occupancy-map now redirects to Sectors.
-- Removed independent bathroom-report screens from navigation.
-- Legacy bathroom-report routes now redirect to Maintenance with bathroom category preselected.
-- Consolidated navigation under "إدارة الطلبات".
-- Added request types: new housing, transfer, temporary exit, permanent exit, final exit.
-- Managers no longer see inspections navigation; inspections remain operational for housing supervisors.
-- Updated release label to Enterprise 5 Unified and health metadata to phase 5.
-- Added Phase 5 regression tests (4 passed).
-
-Notes:
-- Original database retained.
-- Additive/compatible changes only.
-- app_phase4_backup.py contains the pre-change application snapshot.
+3.12.11
