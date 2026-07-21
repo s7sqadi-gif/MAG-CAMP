@@ -7,7 +7,7 @@ from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
 from flask import Flask, abort, redirect, render_template_string, request, session, url_for, send_from_directory, send_file
 
-APP_VERSION='7.3.1'
+APP_VERSION='7.3.2'
 RELEASE_NAME='7.3-stability-and-operations'
 ROOT=os.path.dirname(os.path.abspath(__file__)); DATA_DIR=os.path.join(ROOT,'data'); os.makedirs(DATA_DIR,exist_ok=True)
 DB=os.environ.get('DATABASE_PATH',os.path.join(DATA_DIR,'mhoms.db'))
@@ -91,6 +91,11 @@ def ensure_schema():
   CREATE INDEX IF NOT EXISTS idx_absence_status ON absence_reports(status,reported_by);
   CREATE INDEX IF NOT EXISTS idx_room_events_room ON room_events(room_no,created_at);
   CREATE INDEX IF NOT EXISTS idx_worker_events_worker ON worker_events(worker_id,created_at);
+  CREATE TABLE IF NOT EXISTS project_workers(employee_no TEXT PRIMARY KEY,full_name TEXT,profession TEXT,shift TEXT,rest_day TEXT,source_sheet TEXT,source_location TEXT,updated_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS attendance_batches(id INTEGER PRIMARY KEY AUTOINCREMENT,batch_no TEXT NOT NULL UNIQUE,absence_date TEXT NOT NULL,shift_label TEXT,created_by INTEGER NOT NULL,status TEXT DEFAULT 'draft',source_files_json TEXT,created_at TEXT NOT NULL,completed_at TEXT);
+  CREATE TABLE IF NOT EXISTS attendance_entries(id INTEGER PRIMARY KEY AUTOINCREMENT,batch_id INTEGER NOT NULL,employee_no TEXT NOT NULL,full_name TEXT,profession TEXT,shift TEXT,rest_day TEXT,is_resident INTEGER DEFAULT 0,room_no TEXT,zone TEXT,source_files TEXT,previous_absences INTEGER DEFAULT 0,reason TEXT,notes TEXT,updated_at TEXT,UNIQUE(batch_id,employee_no));
+  CREATE INDEX IF NOT EXISTS idx_attendance_batch_status ON attendance_batches(status,created_by,absence_date);
+  CREATE INDEX IF NOT EXISTS idx_attendance_employee ON attendance_entries(employee_no,batch_id);
   ''')
   # future-safe additive columns
   for table,defs in {
@@ -147,6 +152,7 @@ def is_admin(u):return u['role'] in ('super_admin','services_manager','housing_m
 def can_export(u):return u['role'] in ('super_admin','services_manager','housing_manager')
 def can_maintenance(u):return u['role'] in ('super_admin','services_manager','housing_manager','maintenance_manager','maintenance_supervisor')
 def can_create_housing(u):return u['role'] in ('housing_supervisor','housing_monitor','data_entry')
+def can_attendance(u):return u['role'] in ('super_admin','services_manager','housing_manager','housing_supervisor','housing_monitor')
 def is_maintenance_only(u):return u['role'] in ('maintenance_manager','maintenance_supervisor')
 def assigned_clause(u,alias='r'):
  if u['role']!='housing_supervisor':return '1=1',[]
@@ -217,10 +223,10 @@ BASE='''<!doctype html><html lang="{{lang_code}}" dir="{{direction}}"><head><met
 .mobile-nav{display:flex;align-items:center;gap:7px;background:#fff;padding:7px 8px;position:sticky;top:58px;z-index:15;box-shadow:0 2px 7px #ddd;overflow-x:auto;overflow-y:hidden;white-space:nowrap;-webkit-overflow-scrolling:touch;scrollbar-width:none;min-height:49px}.mobile-nav::-webkit-scrollbar{display:none}.mobile-nav a{flex:0 0 auto;text-align:center;text-decoration:none;color:var(--green);font-size:12px;line-height:1;padding:10px 12px;border-radius:8px;background:#f1f5f3}
 main{padding:12px 10px;margin:0;min-height:0}.cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.card{padding:13px;margin-bottom:10px}.num{font-size:23px}.tbl{min-width:650px}}
 @media(max-width:380px){.cards{grid-template-columns:1fr}.mobile-nav a{padding:9px 10px}.top .userline{max-width:135px}}
-</style></head><body><div class="top"><div class="brand"><img src="{{url_for('static',filename='mag_logo.png')}}" alt="MAG"><div><b>MAG CAMP</b><br><small>{{t.system_name}} — Enterprise 7.3</small></div></div>{% if u %}<div class="userline">{{u['display_name']}}<br><small>{{roles.get(u['role'],u['role'])}} | <a style="color:white" href="{{url_for('logout')}}">{{t.logout}}</a></small></div>{% endif %}</div>{% if u %}<nav class="mobile-nav"><a href="{{url_for('dashboard')}}">{{t.home}}</a><a href="{{url_for('notifications')}}">{{t.notifications}}</a>{% if not maintenance_only %}<a href="{{url_for('global_search')}}">{{t.search}}</a><a href="{{url_for('rooms')}}">{{t.rooms}}</a><a href="{{url_for('occupancy_management')}}">{{t.occupancy}}</a><a href="{{url_for('workers')}}">{{t.workers}}</a>{% if u.role=='housing_supervisor' %}<a href="{{url_for('inspections')}}">{{t.inspections}}</a>{% endif %}<a href="{{url_for('sector_dashboard')}}">القطاعات</a><a href="{{url_for('worker_change_requests')}}">إدارة الطلبات</a><a href="{{url_for('absence_reports_list')}}">بلاغات عدم التواجد</a>{% if admin %}<a href="{{url_for('reports_center')}}">مركز التقارير</a>{% endif %}{% endif %}<a href="{{url_for('tickets')}}">{{t.maintenance}}</a></nav><div class="wrap"><aside class="desktop-nav"><a href="{{url_for('dashboard')}}">{{t.home}}</a><a href="{{url_for('notifications')}}">{{t.notifications}}</a>{% if not maintenance_only %}<a href="{{url_for('global_search')}}">{{t.search}}</a><a href="{{url_for('workers')}}">{{t.workers}}</a><a href="{{url_for('rooms')}}">{{t.rooms}}</a><a href="{{url_for('occupancy_management')}}">{{t.occupancy}}</a>{% if u.role=='housing_supervisor' %}<a href="{{url_for('inspections')}}">{{t.inspections}}</a>{% endif %}<a href="{{url_for('sector_dashboard')}}">القطاعات</a>{% endif %}{% if not maintenance_only %}<a href="{{url_for('worker_change_requests')}}">إدارة الطلبات</a><a href="{{url_for('absence_reports_list')}}">بلاغات عدم التواجد</a>{% if admin %}<a href="{{url_for('reports_center')}}">مركز التقارير</a>{% endif %}{% endif %}<a href="{{url_for('tickets')}}">{{t.maintenance}}</a>{% if u.role in ('super_admin','maintenance_manager','maintenance_supervisor','housing_manager','services_manager') %}<a href="{{url_for('maintenance_dashboard')}}">{{t.maintenance_dashboard}}</a>{% endif %}{% if admin %}<a href="{{url_for('users')}}">{{t.users}}</a><a href="{{url_for('audit_logs')}}">{{t.audit}}</a><a href="{{url_for('backup_restore')}}">النسخ الاحتياطي</a>{% endif %}<a href="{{url_for('change_password')}}">{{t.change_password}}</a></aside><main>{{body|safe}}</main></div>{% else %}{{body|safe}}{% endif %}</body></html>'''
+</style></head><body><div class="top"><div class="brand"><img src="{{url_for('static',filename='mag_logo.png')}}" alt="MAG"><div><b>MAG CAMP</b><br><small>{{t.system_name}} — Enterprise 7.3</small></div></div>{% if u %}<div class="userline">{{u['display_name']}}<br><small>{{roles.get(u['role'],u['role'])}} | <a style="color:white" href="{{url_for('logout')}}">{{t.logout}}</a></small></div>{% endif %}</div>{% if u %}<nav class="mobile-nav"><a href="{{url_for('dashboard')}}">{{t.home}}</a><a href="{{url_for('notifications')}}">{{t.notifications}}</a>{% if not maintenance_only %}<a href="{{url_for('global_search')}}">{{t.search}}</a><a href="{{url_for('rooms')}}">{{t.rooms}}</a><a href="{{url_for('occupancy_management')}}">{{t.occupancy}}</a><a href="{{url_for('workers')}}">{{t.workers}}</a>{% if u.role=='housing_supervisor' %}<a href="{{url_for('inspections')}}">{{t.inspections}}</a>{% endif %}<a href="{{url_for('sector_dashboard')}}">القطاعات</a><a href="{{url_for('worker_change_requests')}}">إدارة الطلبات</a><a href="{{url_for('absence_reports_list')}}">بلاغات عدم التواجد</a>{% if can_attendance %}<a href="{{url_for('attendance_batches')}}">حصر الغياب</a>{% endif %}{% if admin %}<a href="{{url_for('reports_center')}}">مركز التقارير</a>{% endif %}{% endif %}<a href="{{url_for('tickets')}}">{{t.maintenance}}</a></nav><div class="wrap"><aside class="desktop-nav"><a href="{{url_for('dashboard')}}">{{t.home}}</a><a href="{{url_for('notifications')}}">{{t.notifications}}</a>{% if not maintenance_only %}<a href="{{url_for('global_search')}}">{{t.search}}</a><a href="{{url_for('workers')}}">{{t.workers}}</a><a href="{{url_for('rooms')}}">{{t.rooms}}</a><a href="{{url_for('occupancy_management')}}">{{t.occupancy}}</a>{% if u.role=='housing_supervisor' %}<a href="{{url_for('inspections')}}">{{t.inspections}}</a>{% endif %}<a href="{{url_for('sector_dashboard')}}">القطاعات</a>{% endif %}{% if not maintenance_only %}<a href="{{url_for('worker_change_requests')}}">إدارة الطلبات</a><a href="{{url_for('absence_reports_list')}}">بلاغات عدم التواجد</a>{% if can_attendance %}<a href="{{url_for('attendance_batches')}}">حصر الغياب</a>{% endif %}{% if admin %}<a href="{{url_for('reports_center')}}">مركز التقارير</a>{% endif %}{% endif %}<a href="{{url_for('tickets')}}">{{t.maintenance}}</a>{% if u.role in ('super_admin','maintenance_manager','maintenance_supervisor','housing_manager','services_manager') %}<a href="{{url_for('maintenance_dashboard')}}">{{t.maintenance_dashboard}}</a>{% endif %}{% if admin %}<a href="{{url_for('users')}}">{{t.users}}</a><a href="{{url_for('audit_logs')}}">{{t.audit}}</a><a href="{{url_for('backup_restore')}}">النسخ الاحتياطي</a>{% endif %}<a href="{{url_for('change_password')}}">{{t.change_password}}</a></aside><main>{{body|safe}}</main></div>{% else %}{{body|safe}}{% endif %}</body></html>'''
 def page(body,title='MAG CAMP',user=None,**ctx):
  lc=lang() or 'ar'; t=I18N[lc]
- return render_template_string(BASE,title=title,body=render_template_string(body,t=t,lang_code=lc,**ctx),u=user,roles=ROLE_AR,admin=bool(user and is_admin(user)),maintenance_only=bool(user and is_maintenance_only(user)),t=t,lang_code=lc,direction='rtl' if lc=='ar' else 'ltr')
+ return render_template_string(BASE,title=title,body=render_template_string(body,t=t,lang_code=lc,**ctx),u=user,roles=ROLE_AR,admin=bool(user and is_admin(user)),maintenance_only=bool(user and is_maintenance_only(user)),can_attendance=bool(user and can_attendance(user)),t=t,lang_code=lc,direction='rtl' if lc=='ar' else 'ltr')
 
 @app.get('/health')
 def health():
@@ -996,6 +1002,207 @@ def reports_center():
   maint=c.execute('SELECT status,COUNT(*) count FROM maintenance_tickets GROUP BY status ORDER BY count DESC').fetchall();absence=c.execute('SELECT status,COUNT(*) count FROM absence_reports GROUP BY status ORDER BY count DESC').fetchall()
  occupancy=round((k['workers']/k['capacity']*100),1) if k['capacity'] else 0
  return page('''<h2>مركز التقارير ولوحة الإدارة</h2><div class="cards"><div class="card"><div>إجمالي العمال</div><div class="num">{{k.workers}}</div></div><div class="card"><div>الطاقة الاستيعابية</div><div class="num">{{k.capacity}}</div></div><div class="card"><div>نسبة الإشغال</div><div class="num">{{occupancy}}%</div></div><div class="card"><div>الغرف الفارغة</div><div class="num">{{k.vacant_rooms}}</div></div><div class="card"><div>بلاغات الغياب المفتوحة</div><div class="num">{{k.open_absence}}</div></div><div class="card"><div>بلاغات الصيانة المفتوحة</div><div class="num">{{k.open_tickets}}</div></div></div><div class="card"><h3>تقرير العمالة</h3><a class="btn" href="{{url_for('export_workers_excel')}}">Excel لجميع بيانات العمالة</a> <a class="btn btn2" href="{{url_for('export_workers_pdf')}}">PDF لجميع بيانات العمالة</a> <a class="btn btn2" href="{{url_for('workers')}}">فتح كشف العمال</a></div><div class="grid"><div class="card"><h3>الإشغال حسب الزون</h3><table class="tbl"><tr><th>الزون</th><th>الغرف</th><th>السعة</th><th>العمال</th><th>الإشغال</th></tr>{% for z in zones %}<tr><td>{{z.zone}}</td><td>{{z.rooms}}</td><td>{{z.capacity}}</td><td>{{z.workers}}</td><td>{{((z.workers/z.capacity*100)|round(1)) if z.capacity else 0}}%</td></tr>{% endfor %}</table></div><div class="card"><h3>حالات الصيانة</h3>{% for x in maint %}<p>{{status_ar.get(x.status,x.status)}}: <b>{{x.count}}</b></p>{% endfor %}<h3>حالات عدم التواجد</h3>{% for x in absence %}<p>{{x.status}}: <b>{{x.count}}</b></p>{% endfor %}</div></div>''','مركز التقارير',u,k=k,zones=zones,maint=maint,absence=absence,occupancy=occupancy,status_ar=STATUS_AR)
+
+ABSENCE_REASONS=['سيتم إرساله إلى الحرم','مريض داخل السكن','تم نقله إلى المستشفى','غير متواجد في السكن','يوم راحة','إجازة سنوية','تم تغيير الوردية','رفض الذهاب إلى العمل','غياب بدون عذر','غير مقيم في السكن','منقول إلى مشروع آخر','خروج نهائي','أخرى']
+
+def normalize_employee_no(value):
+ if value is None:return ''
+ text=str(value).strip().replace(' ','')
+ if text.endswith('.0'):text=text[:-2]
+ return ''.join(ch for ch in text if ch.isdigit()) or text
+
+def read_absence_workbooks(files):
+ from openpyxl import load_workbook
+ results={};errors=[]
+ no_aliases={'الرقم الوظيفي','رقم وظيفي','الرقم','employee no','employee number','emp no','emp id','id'}
+ name_aliases={'الاسم','الإسم','اسم العامل','employee name','name'}
+ for f in files:
+  if not f or not f.filename:continue
+  if not f.filename.lower().endswith(('.xlsx','.xlsm')):
+   errors.append(f'{f.filename}: الصيغة غير مدعومة');continue
+  try:
+   wb=load_workbook(f,read_only=True,data_only=True);found=0
+   for ws in wb.worksheets:
+    header_row=0;no_col=None;name_col=None
+    for r_idx,row in enumerate(ws.iter_rows(min_row=1,max_row=min(ws.max_row,15),values_only=True),1):
+     for c_idx,val in enumerate(row,1):
+      key=str(val or '').strip().lower()
+      if key in no_aliases:no_col=c_idx;header_row=r_idx
+      if key in name_aliases:name_col=c_idx
+     if no_col:break
+    if not no_col:continue
+    for row in ws.iter_rows(min_row=header_row+1,values_only=True):
+     eno=normalize_employee_no(row[no_col-1] if len(row)>=no_col else None)
+     if not eno or len(eno)<3:continue
+     nm=str(row[name_col-1]).strip() if name_col and len(row)>=name_col and row[name_col-1] else ''
+     item=results.setdefault(eno,{'employee_no':eno,'file_names':[],'import_name':nm})
+     if f.filename not in item['file_names']:item['file_names'].append(f.filename)
+     if not item.get('import_name') and nm:item['import_name']=nm
+     found+=1
+   wb.close()
+   if not found:errors.append(f'{f.filename}: لم يتم العثور على أرقام وظيفية')
+  except Exception as exc:errors.append(f'{f.filename}: تعذر القراءة ({exc})')
+ return list(results.values()),errors
+
+@app.route('/attendance',methods=['GET','POST'])
+@login_required
+def attendance_batches():
+ u=current_user()
+ if not can_attendance(u):abort(403)
+ err=''
+ if request.method=='POST':
+  files=request.files.getlist('absence_files');items,errors=read_absence_workbooks(files)
+  if not items:err='لم يتم العثور على أرقام وظيفية صالحة. '+'، '.join(errors)
+  else:
+   absence_date=request.form.get('absence_date') or date.today().isoformat();shift_label=request.form.get('shift_label','')
+   with closing(conn()) as c:
+    batch_no='ABS-'+datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:4].upper()
+    cur=c.execute('INSERT INTO attendance_batches(batch_no,absence_date,shift_label,created_by,status,source_files_json,created_at) VALUES(?,?,?,?,?,?,?)',(batch_no,absence_date,shift_label,u['id'],'draft',json.dumps([f.filename for f in files if f and f.filename],ensure_ascii=False),now()));bid=cur.lastrowid
+    for item in items:
+     eno=item['employee_no'];resident=c.execute("SELECT employee_no,full_name,profession,zone,room_no FROM workers WHERE employee_no=? AND COALESCE(archived,0)=0 LIMIT 1",(eno,)).fetchone();project=c.execute('SELECT * FROM project_workers WHERE employee_no=?',(eno,)).fetchone();previous=c.execute("SELECT COUNT(*) FROM attendance_entries e JOIN attendance_batches b ON b.id=e.batch_id WHERE e.employee_no=? AND b.status='completed'",(eno,)).fetchone()[0]
+     full_name=(resident['full_name'] if resident else None) or (project['full_name'] if project else None) or item.get('import_name') or 'غير معروف';profession=(resident['profession'] if resident else None) or (project['profession'] if project else None) or '';shift=(project['shift'] if project else None) or shift_label;rest_day=(project['rest_day'] if project else None) or ''
+     c.execute('INSERT INTO attendance_entries(batch_id,employee_no,full_name,profession,shift,rest_day,is_resident,room_no,zone,source_files,previous_absences,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(bid,eno,full_name,profession,shift,rest_day,1 if resident else 0,resident['room_no'] if resident else '',str(resident['zone']) if resident else '','، '.join(item['file_names']),previous,now()))
+    audit(c,u,'create','attendance_batch',bid,{'count':len(items),'files':len(files),'errors':errors});c.commit()
+   return redirect(url_for('attendance_batch_detail',bid=bid))
+ with closing(conn()) as c:
+  if is_admin(u):rows=c.execute('SELECT b.*,u.display_name creator,(SELECT COUNT(*) FROM attendance_entries e WHERE e.batch_id=b.id) total FROM attendance_batches b LEFT JOIN users u ON u.id=b.created_by ORDER BY b.id DESC LIMIT 200').fetchall()
+  else:rows=c.execute('SELECT b.*,u.display_name creator,(SELECT COUNT(*) FROM attendance_entries e WHERE e.batch_id=b.id) total FROM attendance_batches b LEFT JOIN users u ON u.id=b.created_by WHERE b.created_by=? ORDER BY b.id DESC LIMIT 100',(u['id'],)).fetchall()
+ return page("""<h2>حصر غياب العمالة</h2><div class='card'><h3>إنشاء حصر جديد من عدة ملفات</h3>{% if err %}<p class='err'>{{err}}</p>{% endif %}<form method='post' enctype='multipart/form-data'><div class='grid'><div class='field'><label>تاريخ الغياب</label><input type='date' name='absence_date' value='{{today}}' required></div><div class='field'><label>الوردية العامة إن لم تكن مسجلة</label><input name='shift_label' placeholder='مثال: الوردية الأولى'></div></div><div class='field'><label>ملفات حصر الغياب — يمكن اختيار أكثر من Excel</label><input type='file' name='absence_files' accept='.xlsx,.xlsm' multiple required><small class='muted'>سيتم دمج جميع الملفات في حصر واحد، والرقم المكرر سيظهر مرة واحدة مع أسماء مصادره.</small></div><button class='btn'>رفع ودمج الملفات</button></form></div><div class='card'><h3>ملفات الحصر</h3><div class='tbl-wrap'><table class='tbl'><tr><th>رقم الحصر</th><th>التاريخ</th><th>الوردية</th><th>الإجمالي</th><th>أعده</th><th>الحالة</th><th></th></tr>{% for x in rows %}<tr><td>{{x.batch_no}}</td><td>{{x.absence_date}}</td><td>{{x.shift_label or '-'}}</td><td>{{x.total}}</td><td>{{x.creator or '-'}}</td><td><span class='badge'>{{'معتمد' if x.status=='completed' else 'مسودة'}}</span></td><td><a href='{{url_for("attendance_batch_detail",bid=x.id)}}'>فتح</a></td></tr>{% else %}<tr><td colspan='7'>لا توجد ملفات حصر حتى الآن.</td></tr>{% endfor %}</table></div></div>{% if admin %}<div class='card'><a class='btn btn2' href='{{url_for("attendance_history")}}'>سجل غياب العمالة</a> <a class='btn btn2' href='{{url_for("project_workers_import")}}'>تحديث ملف عمالة المشروع</a></div>{% endif %}""",'حصر الغياب',u,rows=rows,err=err,today=date.today().isoformat(),admin=is_admin(u))
+
+@app.route('/attendance/<int:bid>',methods=['GET','POST'])
+@login_required
+def attendance_batch_detail(bid):
+ u=current_user()
+ if not can_attendance(u):abort(403)
+ with closing(conn()) as c:
+  b=c.execute('SELECT b.*,u.display_name creator FROM attendance_batches b LEFT JOIN users u ON u.id=b.created_by WHERE b.id=?',(bid,)).fetchone()
+  if not b or (not is_admin(u) and b['created_by']!=u['id']):abort(404)
+  if request.method=='POST':
+   action=request.form.get('action')
+   if action=='save' and b['status']!='completed':
+    for eid in request.form.getlist('entry_id'):c.execute('UPDATE attendance_entries SET reason=?,notes=?,updated_at=? WHERE id=? AND batch_id=?',(request.form.get('reason_'+eid,''),request.form.get('notes_'+eid,''),now(),eid,bid))
+    bulk=request.form.get('bulk_reason','');selected=request.form.getlist('selected')
+    if bulk and selected:
+     q=','.join('?'*len(selected));c.execute(f'UPDATE attendance_entries SET reason=?,updated_at=? WHERE batch_id=? AND id IN ({q})',[bulk,now(),bid]+selected)
+    c.commit();return redirect(url_for('attendance_batch_detail',bid=bid))
+   if action=='complete' and b['status']!='completed':
+    missing=c.execute("SELECT COUNT(*) FROM attendance_entries WHERE batch_id=? AND COALESCE(reason,'')=''",(bid,)).fetchone()[0]
+    if missing:return redirect(url_for('attendance_batch_detail',bid=bid,missing=missing))
+    c.execute("UPDATE attendance_batches SET status='completed',completed_at=? WHERE id=?",(now(),bid));audit(c,u,'complete','attendance_batch',bid);c.commit();return redirect(url_for('attendance_batch_detail',bid=bid))
+   if action=='reopen' and is_admin(u):c.execute("UPDATE attendance_batches SET status='draft',completed_at=NULL WHERE id=?",(bid,));c.commit();return redirect(url_for('attendance_batch_detail',bid=bid))
+  rows=c.execute('SELECT * FROM attendance_entries WHERE batch_id=? ORDER BY previous_absences DESC,full_name',(bid,)).fetchall();summary=c.execute("SELECT COALESCE(NULLIF(reason,''),'غير مسجل') reason,COUNT(*) count FROM attendance_entries WHERE batch_id=? GROUP BY COALESCE(NULLIF(reason,''),'غير مسجل') ORDER BY count DESC",(bid,)).fetchall()
+ missing=request.args.get('missing')
+ return page("""<h2>حصر الغياب {{b.batch_no}}</h2><div class='cards'><div class='card'><div>إجمالي المتغيبين</div><div class='num'>{{rows|length}}</div></div><div class='card'><div>مقيمون في السكن</div><div class='num'>{{rows|selectattr('is_resident','equalto',1)|list|length}}</div></div><div class='card'><div>غير مقيمين</div><div class='num'>{{rows|selectattr('is_resident','equalto',0)|list|length}}</div></div><div class='card'><div>متكرر غيابهم</div><div class='num'>{{rows|selectattr('previous_absences','gt',0)|list|length}}</div></div></div>{% if missing %}<p class='err'>متبقي {{missing}} عامل بدون سبب غياب.</p>{% endif %}<div class='card'><p><b>التاريخ:</b> {{b.absence_date}} · <b>أعده:</b> {{b.creator}} · <b>الحالة:</b> {{'معتمد' if b.status=='completed' else 'مسودة'}}</p><a class='btn' href='{{url_for("attendance_export_excel",bid=b.id)}}'>Excel Dashboard</a> <a class='btn btn2' href='{{url_for("attendance_export_pdf",bid=b.id)}}'>PDF Dashboard</a>{% if admin and b.status=='completed' %}<form method='post' style='display:inline'><button class='btn danger' name='action' value='reopen'>إعادة فتح</button></form>{% endif %}</div><div class='card'><h3>ملخص الأسباب</h3>{% for x in summary %}<span class='badge'>{{x.reason}}: {{x.count}}</span> {% endfor %}</div><form method='post'><div class='card'><div class='grid'><div class='field'><label>تطبيق سبب على المحددين</label><select name='bulk_reason'><option value=''>اختر السبب</option>{% for r in reasons %}<option>{{r}}</option>{% endfor %}</select></div><div class='field'><label>&nbsp;</label><button class='btn' name='action' value='save'>حفظ التعديلات</button></div></div></div><div class='tbl-wrap'><table class='tbl'><tr><th>تحديد</th><th>الرقم</th><th>الاسم</th><th>الغرفة</th><th>الزون</th><th>الوردية</th><th>الراحة</th><th>السكن</th><th>الغياب السابق</th><th>مصدر الملف</th><th>السبب</th><th>ملاحظات</th></tr>{% for x in rows %}<tr><td><input type='checkbox' name='selected' value='{{x.id}}'><input type='hidden' name='entry_id' value='{{x.id}}'></td><td>{{x.employee_no}}</td><td>{{x.full_name}}</td><td>{{x.room_no or '-'}}</td><td>{{x.zone or '-'}}</td><td>{{x.shift or '-'}}</td><td>{{x.rest_day or '-'}}</td><td>{{'مقيم' if x.is_resident else 'غير مقيم'}}</td><td><b>{{x.previous_absences}}</b>{% if x.previous_absences>=5 %}<br><span class='badge red'>غياب متكرر</span>{% endif %}</td><td>{{x.source_files}}</td><td><select name='reason_{{x.id}}' {% if b.status=='completed' %}disabled{% endif %}><option value=''>اختر</option>{% for r in reasons %}<option {% if x.reason==r %}selected{% endif %}>{{r}}</option>{% endfor %}</select></td><td><input name='notes_{{x.id}}' value='{{x.notes or ""}}' {% if b.status=='completed' %}disabled{% endif %}></td></tr>{% endfor %}</table></div>{% if b.status!='completed' %}<div class='card'><button class='btn' name='action' value='save'>حفظ</button> <button class='btn btn2' name='action' value='complete'>اعتماد الحصر النهائي</button></div>{% endif %}</form>""",'تفاصيل حصر الغياب',u,b=b,rows=rows,summary=summary,reasons=ABSENCE_REASONS,missing=missing,admin=is_admin(u))
+
+@app.route('/attendance/project-workers',methods=['GET','POST'])
+@login_required
+def project_workers_import():
+ u=current_user()
+ if not is_admin(u):abort(403)
+ msg='';err=''
+ if request.method=='POST':
+  f=request.files.get('project_file')
+  try:
+   from openpyxl import load_workbook
+   wb=load_workbook(f,read_only=True,data_only=True);count=0
+   with closing(conn()) as c:
+    for ws in wb.worksheets:
+     header=None
+     for idx,row in enumerate(ws.iter_rows(min_row=1,max_row=min(ws.max_row,15),values_only=True),1):
+      vals=[str(v or '').strip() for v in row]
+      if any(v in ('الرقم الوظيفي','رقم وظيفي') for v in vals):header=(idx,vals);break
+     if not header:continue
+     hi,vals=header
+     def col(names):
+      for n in names:
+       if n in vals:return vals.index(n)
+      return None
+     ci=col(['الرقم الوظيفي','رقم وظيفي']);cn=col(['الإسم','الاسم']);cp=col(['المسمى الوظيفي']);cs=col(['الوردية']);cr=col(['الراحات','الراحة']);cl=col(['الموقع','الموقع الاساسي '])
+     for row in ws.iter_rows(min_row=hi+1,values_only=True):
+      eno=normalize_employee_no(row[ci] if ci is not None and len(row)>ci else None)
+      if not eno:continue
+      val=lambda i: str(row[i]).strip() if i is not None and len(row)>i and row[i] is not None else ''
+      c.execute('INSERT INTO project_workers(employee_no,full_name,profession,shift,rest_day,source_sheet,source_location,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(employee_no) DO UPDATE SET full_name=excluded.full_name,profession=excluded.profession,shift=excluded.shift,rest_day=excluded.rest_day,source_sheet=excluded.source_sheet,source_location=excluded.source_location,updated_at=excluded.updated_at',(eno,val(cn),val(cp),val(cs),val(cr),ws.title,val(cl),now()));count+=1
+    audit(c,u,'import','project_workers',None,{'count':count,'file':f.filename});c.commit()
+   wb.close();msg=f'تم دمج وتحديث {count} سجل من عمالة المشروع.'
+  except Exception as exc:err='تعذر استيراد الملف: '+str(exc)
+ with closing(conn()) as c:total=c.execute('SELECT COUNT(*) FROM project_workers').fetchone()[0];matched=c.execute('SELECT COUNT(*) FROM project_workers p WHERE EXISTS(SELECT 1 FROM workers w WHERE w.employee_no=p.employee_no AND w.archived=0)').fetchone()[0]
+ return page("""<h2>تحديث عمالة المشروع والورديات والراحات</h2>{% if msg %}<p class='ok'>{{msg}}</p>{% endif %}{% if err %}<p class='err'>{{err}}</p>{% endif %}<div class='cards'><div class='card'><div>عمالة المشروع</div><div class='num'>{{total}}</div></div><div class='card'><div>مطابقون مع سكان السكن</div><div class='num'>{{matched}}</div></div><div class='card'><div>غير مقيمين في السكن</div><div class='num'>{{total-matched}}</div></div></div><div class='card'><form method='post' enctype='multipart/form-data'><div class='field'><label>ملف جميع عمالة المشروع</label><input type='file' name='project_file' accept='.xlsx,.xlsm' required></div><button class='btn'>دمج وتحديث البيانات</button></form></div>""",'عمالة المشروع',u,total=total,matched=matched,msg=msg,err=err)
+
+@app.get('/attendance/history')
+@login_required
+def attendance_history():
+ u=current_user()
+ if not is_admin(u):abort(403)
+ q=request.args.get('q','').strip();params=[];where="b.status='completed'"
+ if q:where+=' AND (e.employee_no LIKE ? OR e.full_name LIKE ?)';params=[f'%{q}%',f'%{q}%']
+ with closing(conn()) as c:rows=c.execute(f'SELECT e.employee_no,MAX(e.full_name) full_name,MAX(e.room_no) room_no,MAX(e.shift) shift,COUNT(*) total,MAX(b.absence_date) last_date,GROUP_CONCAT(DISTINCT e.reason) reasons FROM attendance_entries e JOIN attendance_batches b ON b.id=e.batch_id WHERE {where} GROUP BY e.employee_no ORDER BY total DESC,last_date DESC LIMIT 1000',params).fetchall()
+ return page("""<h2>سجل غياب العمالة</h2><form class='card'><div class='field'><label>بحث بالرقم الوظيفي أو الاسم</label><input name='q' value='{{q}}'></div><button class='btn'>بحث</button></form><div class='tbl-wrap'><table class='tbl'><tr><th>الرقم</th><th>الاسم</th><th>الغرفة</th><th>الوردية</th><th>إجمالي الغياب</th><th>آخر غياب</th><th>الأسباب المسجلة</th></tr>{% for x in rows %}<tr><td>{{x.employee_no}}</td><td>{{x.full_name}}</td><td>{{x.room_no or '-'}}</td><td>{{x.shift or '-'}}</td><td><b>{{x.total}}</b>{% if x.total>=5 %} <span class='badge red'>متكرر</span>{% endif %}</td><td>{{x.last_date}}</td><td>{{x.reasons or '-'}}</td></tr>{% endfor %}</table></div>""",'سجل الغياب',u,rows=rows,q=q)
+
+def attendance_export_data(bid,u):
+ with closing(conn()) as c:
+  b=c.execute('SELECT b.*,u.display_name creator FROM attendance_batches b LEFT JOIN users u ON u.id=b.created_by WHERE b.id=?',(bid,)).fetchone()
+  if not b or (not is_admin(u) and b['created_by']!=u['id']):abort(404)
+  rows=c.execute('SELECT * FROM attendance_entries WHERE batch_id=? ORDER BY previous_absences DESC,full_name',(bid,)).fetchall();summary=c.execute("SELECT COALESCE(NULLIF(reason,''),'غير مسجل') reason,COUNT(*) count FROM attendance_entries WHERE batch_id=? GROUP BY COALESCE(NULLIF(reason,''),'غير مسجل') ORDER BY count DESC",(bid,)).fetchall()
+ return b,rows,summary
+
+@app.get('/attendance/<int:bid>/export.xlsx')
+@login_required
+def attendance_export_excel(bid):
+ u=current_user()
+ if not can_attendance(u):abort(403)
+ from openpyxl import Workbook
+ from openpyxl.styles import Font,PatternFill,Alignment
+ from openpyxl.chart import PieChart,Reference
+ b,rows,summary=attendance_export_data(bid,u);wb=Workbook();dash=wb.active;dash.title='Dashboard';details=wb.create_sheet('تفاصيل الغياب');repeat=wb.create_sheet('متكرر الغياب')
+ for ws in (dash,details,repeat):ws.sheet_view.rightToLeft=True
+ dash.merge_cells('A1:H2');dash['A1']='MAG CAMP — لوحة حصر غياب العمالة';dash['A1'].font=Font(size=18,bold=True,color='FFFFFF');dash['A1'].fill=PatternFill('solid',fgColor='17365D');dash['A1'].alignment=Alignment(horizontal='center',vertical='center')
+ resident=sum(1 for x in rows if x['is_resident']);repeated=sum(1 for x in rows if x['previous_absences']>0);kpis=[('إجمالي المتغيبين',len(rows)),('المقيمون',resident),('غير المقيمين',len(rows)-resident),('لديهم غياب سابق',repeated)]
+ for i,(label,value) in enumerate(kpis):
+  col=1+i*2;dash.cell(4,col,label);dash.cell(5,col,value);dash.merge_cells(start_row=4,start_column=col,end_row=4,end_column=col+1);dash.merge_cells(start_row=5,start_column=col,end_row=5,end_column=col+1)
+  for r in (4,5):dash.cell(r,col).alignment=Alignment(horizontal='center');dash.cell(r,col).fill=PatternFill('solid',fgColor='D9EAF7' if r==4 else 'FFFFFF');dash.cell(r,col).font=Font(bold=True,size=14 if r==5 else 11)
+ dash['A7']='السبب';dash['B7']='العدد'
+ for i,x in enumerate(summary,8):dash.cell(i,1,x['reason']);dash.cell(i,2,x['count'])
+ if summary:
+  pie=PieChart();pie.title='توزيع أسباب الغياب';pie.add_data(Reference(dash,min_col=2,min_row=7,max_row=7+len(summary)),titles_from_data=True);pie.set_categories(Reference(dash,min_col=1,min_row=8,max_row=7+len(summary)));pie.height=8;pie.width=12;dash.add_chart(pie,'D7')
+ headers=['م','الرقم الوظيفي','الاسم','المهنة','الغرفة','الزون','الوردية','الراحة','حالة السكن','الغياب السابق','مصدر الملف','سبب الغياب','الملاحظات'];details.append(headers);repeat.append(headers)
+ for i,x in enumerate(rows,1):
+  line=[i,x['employee_no'],x['full_name'],x['profession'],x['room_no'],x['zone'],x['shift'],x['rest_day'],'مقيم' if x['is_resident'] else 'غير مقيم',x['previous_absences'],x['source_files'],x['reason'],x['notes']];details.append(line)
+  if x['previous_absences']>0:repeat.append(line)
+ for ws in (details,repeat):
+  for cell in ws[1]:cell.fill=PatternFill('solid',fgColor='17365D');cell.font=Font(color='FFFFFF',bold=True);cell.alignment=Alignment(horizontal='center')
+  ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
+  for idx,w in enumerate([6,16,28,22,12,10,16,14,14,14,30,24,30],1):ws.column_dimensions[chr(64+idx)].width=w
+ for col in range(1,9):dash.column_dimensions[chr(64+col)].width=18
+ bio=io.BytesIO();wb.save(bio);bio.seek(0)
+ return send_file(bio,as_attachment=True,download_name=f'attendance_{b["absence_date"]}_{b["batch_no"]}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+@app.get('/attendance/<int:bid>/export.pdf')
+@login_required
+def attendance_export_pdf(bid):
+ u=current_user()
+ if not can_attendance(u):abort(403)
+ from reportlab.lib.pagesizes import A3,landscape
+ from reportlab.platypus import SimpleDocTemplate,Table,TableStyle,Paragraph,Spacer,PageBreak
+ from reportlab.lib import colors
+ from reportlab.lib.styles import ParagraphStyle
+ from reportlab.pdfbase import pdfmetrics
+ from reportlab.pdfbase.ttfonts import TTFont
+ import arabic_reshaper
+ from bidi.algorithm import get_display
+ b,rows,summary=attendance_export_data(bid,u);bio=io.BytesIO()
+ try:pdfmetrics.registerFont(TTFont('Arabic','/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))
+ except Exception:pass
+ def ar(v):return get_display(arabic_reshaper.reshape(str(v or '')))
+ doc=SimpleDocTemplate(bio,pagesize=landscape(A3),rightMargin=24,leftMargin=24,topMargin=24,bottomMargin=24);style=ParagraphStyle('ar',fontName='Arabic',fontSize=10,alignment=2);title=ParagraphStyle('title',fontName='Arabic',fontSize=18,alignment=1,spaceAfter=16)
+ story=[Paragraph(ar('MAG CAMP — تقرير حصر غياب العمالة'),title),Paragraph(ar(f'رقم الحصر: {b["batch_no"]} | التاريخ: {b["absence_date"]} | أعده: {b["creator"]}'),style),Spacer(1,12)]
+ kpi=[[ar('إجمالي المتغيبين'),ar('المقيمون'),ar('غير المقيمين'),ar('لديهم غياب سابق')],[len(rows),sum(1 for x in rows if x['is_resident']),sum(1 for x in rows if not x['is_resident']),sum(1 for x in rows if x['previous_absences']>0)]];t=Table(kpi,colWidths=[180]*4,rowHeights=[30,38]);t.setStyle(TableStyle([('FONT',(0,0),(-1,-1),'Arabic'),('BACKGROUND',(0,0),(-1,0),colors.HexColor('#17365D')),('TEXTCOLOR',(0,0),(-1,0),colors.white),('ALIGN',(0,0),(-1,-1),'CENTER'),('GRID',(0,0),(-1,-1),0.5,colors.grey)]));story += [t,Spacer(1,16)]
+ sm=[[ar('سبب الغياب'),ar('العدد')]]+[[ar(x['reason']),x['count']] for x in summary];st=Table(sm,colWidths=[350,100]);st.setStyle(TableStyle([('FONT',(0,0),(-1,-1),'Arabic'),('BACKGROUND',(0,0),(-1,0),colors.HexColor('#17365D')),('TEXTCOLOR',(0,0),(-1,0),colors.white),('ALIGN',(0,0),(-1,-1),'CENTER'),('GRID',(0,0),(-1,-1),0.4,colors.grey)]));story += [st,PageBreak()]
+ data=[[ar(x) for x in ['م','الرقم','الاسم','الغرفة','الزون','الوردية','الراحة','السكن','السابق','السبب']]]
+ for i,x in enumerate(rows,1):data.append([i,x['employee_no'],ar(x['full_name']),x['room_no'] or '-',x['zone'] or '-',ar(x['shift']),ar(x['rest_day']),ar('مقيم' if x['is_resident'] else 'غير مقيم'),x['previous_absences'],ar(x['reason'])])
+ dt=Table(data,repeatRows=1,colWidths=[30,70,180,55,45,80,70,70,45,140]);dt.setStyle(TableStyle([('FONT',(0,0),(-1,-1),'Arabic'),('FONTSIZE',(0,0),(-1,-1),7),('BACKGROUND',(0,0),(-1,0),colors.HexColor('#17365D')),('TEXTCOLOR',(0,0),(-1,0),colors.white),('GRID',(0,0),(-1,-1),0.25,colors.grey),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(0,0),(-1,-1),'CENTER')]));story.append(dt);doc.build(story);bio.seek(0)
+ return send_file(bio,as_attachment=True,download_name=f'attendance_{b["absence_date"]}_{b["batch_no"]}.pdf',mimetype='application/pdf')
+
 
 @app.route('/backup',methods=['GET','POST'])
 @login_required
