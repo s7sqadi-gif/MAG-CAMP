@@ -1,0 +1,17 @@
+MAG CAMP 7.3 — Attendance Workflow Update
+
+Implemented:
+- Reads employee numbers across uploaded absence Excel files by matching against the database.
+- Uses Saudi Arabia's current date automatically for same-day absence files.
+- Automatically classifies employees whose rest day matches today as "راحة أسبوعية".
+- Highlights weekly-rest rows in red and excludes them from unresolved absence count.
+- Adds attendance filters: search, zone, room, shift, resident/non-resident, missing reason, repeated absence, weekly rest, and multiple absentees in same room.
+- Shows a badge when more than one absent employee belongs to the same room.
+- Adds selective project data updates for shifts, rest days, names, and professions.
+- Project data update access remains limited to Housing Manager, Services Manager, and Super Admin.
+- Project update never changes room, zone, or housing residency data.
+
+Verification:
+- Tested against the supplied second-shift absence workbook.
+- 116 employee numbers matched.
+- 21 employees were automatically classified as weekly rest for Tuesday during the test.
