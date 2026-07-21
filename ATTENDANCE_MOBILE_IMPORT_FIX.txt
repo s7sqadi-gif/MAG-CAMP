@@ -1,0 +1,10 @@
+MAG CAMP 7.3 - Attendance Mobile & Multi-Column Excel Fix
+
+- Fixed mobile horizontal overflow / blank white area.
+- Attendance title now wraps safely on phones.
+- Excel reader now supports multiple repeated groups (No. / Name / Employee No.) in the same worksheet.
+- Prevents section titles, dates and sequence numbers from being read as employee numbers.
+- Verified using: حصر الغياب ساحات الوردية الأولى 21.07.2026.xlsx
+- Expected and tested result: 70 unique absent workers.
+- All 70 matched project workforce data for shift and rest day.
+- 53 matched current MAG CAMP residents and therefore show room and zone; 17 are correctly marked non-resident.

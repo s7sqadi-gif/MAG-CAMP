@@ -1,0 +1,10 @@
+MAG CAMP 7.3 — Attendance Database Scan Fix
+
+- Absence Excel import no longer depends on a column header such as "الرقم الوظيفي".
+- The importer scans every cell in every worksheet.
+- A numeric value is accepted only when it exactly matches an employee number in:
+  1) active MAG CAMP residents, or
+  2) the imported project workforce database.
+- This prevents dates, serial numbers, totals, and unrelated numbers from being imported.
+- Duplicate employee numbers across sheets/files are merged into one attendance entry.
+- Tested with the uploaded second-shift workbook: 116 unique matching employee numbers found.
