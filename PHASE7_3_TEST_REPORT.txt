@@ -1,0 +1,15 @@
+MAG CAMP 7.3 Test Report
+
+- Python syntax compilation: PASS
+- Dependency installation in a clean virtual environment: PASS
+- Application import: PASS
+- /health: HTTP 200
+- Dashboard as housing manager: HTTP 200
+- Available beds as housing manager: HTTP 200
+- Available beds as an active housing supervisor: HTTP 200
+- Supervisor availability query uses rooms.supervisor_id to limit results to assigned rooms: PASS
+- Requests management: HTTP 200
+- Absence reports list: HTTP 200
+- New housing request room prefill from available-beds screen: PASS
+
+No database rebuild was performed. Existing SQLite database was retained.
