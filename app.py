@@ -1,18 +1,20 @@
 import hashlib, hmac, io, json, os, shutil, sqlite3, tempfile, uuid
+from pathlib import Path
 from contextlib import closing
 from datetime import date, datetime
 from functools import wraps
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import RequestEntityTooLarge
 from flask import Flask, abort, redirect, render_template_string, request, session, url_for, send_from_directory, send_file
 
-APP_VERSION='7.3.0'
-RELEASE_NAME='7.3-interactive-operations'
+APP_VERSION='7.3.1'
+RELEASE_NAME='7.3-stability-and-operations'
 ROOT=os.path.dirname(os.path.abspath(__file__)); DATA_DIR=os.path.join(ROOT,'data'); os.makedirs(DATA_DIR,exist_ok=True)
 DB=os.environ.get('DATABASE_PATH',os.path.join(DATA_DIR,'mhoms.db'))
-UPLOAD_DIR=os.path.join(ROOT,'uploads'); os.makedirs(UPLOAD_DIR,exist_ok=True)
+UPLOAD_DIR=os.environ.get('UPLOAD_PATH',os.path.join(ROOT,'uploads')); os.makedirs(UPLOAD_DIR,exist_ok=True)
 app=Flask(__name__); app.secret_key=os.environ.get('SECRET_KEY','local-development-secret-change-me')
-app.config.update(SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Lax',SESSION_COOKIE_SECURE=os.environ.get('RENDER','').lower()=='true',MAX_CONTENT_LENGTH=8*1024*1024)
-ROLE_AR={'services_manager':'مدير الخدمات المساندة','housing_manager':'مدير السكن','housing_supervisor':'مشرف السكن','housing_monitor':'مراقب السكن','maintenance_manager':'مدير الصيانة','maintenance_supervisor':'مشرف الصيانة','data_entry':'مدخل بيانات'}
+app.config.update(SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Lax',SESSION_COOKIE_SECURE=os.environ.get('RENDER','').lower()=='true',MAX_CONTENT_LENGTH=int(os.environ.get('MAX_UPLOAD_MB','25'))*1024*1024)
+ROLE_AR={'super_admin':'مدير النظام الشامل','services_manager':'مدير الخدمات المساندة','housing_manager':'مدير السكن','housing_supervisor':'مشرف السكن','housing_monitor':'مراقب السكن','maintenance_manager':'مدير الصيانة','maintenance_supervisor':'مشرف الصيانة','data_entry':'مدخل بيانات'}
 REQ_AR={'transfer':'نقل عامل','final_exit':'خروج نهائي','outside_temp':'سكن خارجي مؤقت','outside_perm':'سكن خارجي دائم','add_worker':'إضافة عامل جديد','delete_worker':'حذف/أرشفة عامل'}
 STATUS_AR={'pending':'بانتظار الاعتماد','approved':'معتمد','rejected':'مرفوض','new':'جديد','in_progress':'قيد التنفيذ','completed':'مكتمل','verified':'تم التحقق','closed':'مغلق','pending_maintenance':'بانتظار قبول الصيانة','accepted':'مقبول من الصيانة','awaiting_reporter':'بانتظار اعتماد مقدم البلاغ','returned':'معاد للصيانة'}
 ROOM_USAGE_AR={'residential':'سكن عمال','warehouse':'مستودع','security':'حراسات الأمن الداخلي','contractor':'مقاول','administration':'إدارة','maintenance':'صيانة','laundry':'مغسلة','closed':'مغلق','out_of_service':'خارج الخدمة','other':'أخرى'}
@@ -23,9 +25,28 @@ def conn():
 def now(): return datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
 def save_upload(file_storage, prefix='ticket'):
  if not file_storage or not file_storage.filename:return None
- ext=os.path.splitext(secure_filename(file_storage.filename))[1].lower()
- if ext not in ('.jpg','.jpeg','.png','.webp'):raise ValueError('صيغة الصورة غير مدعومة')
- name=f"{prefix}_{uuid.uuid4().hex}{ext}"; file_storage.save(os.path.join(UPLOAD_DIR,name)); return name
+ safe=secure_filename(file_storage.filename)
+ ext=os.path.splitext(safe)[1].lower()
+ allowed={'.jpg','.jpeg','.png','.webp'}
+ if ext not in allowed:raise ValueError('صيغة الصورة غير مدعومة. استخدم JPG أو PNG أو WEBP.')
+ os.makedirs(UPLOAD_DIR,exist_ok=True)
+ name=f"{prefix}_{uuid.uuid4().hex}{ext}"
+ target=os.path.join(UPLOAD_DIR,name)
+ try:
+  file_storage.save(target)
+  if not os.path.isfile(target) or os.path.getsize(target)==0:raise OSError('تم استلام ملف فارغ')
+  return name
+ except Exception as exc:
+  try:
+   if os.path.exists(target):os.remove(target)
+  except OSError:pass
+  raise ValueError('تعذر حفظ الصورة على الخادم. تحقق من حجم الصورة ثم أعد المحاولة.') from exc
+
+def cleanup_uploads(names):
+ for name in names:
+  if not name:continue
+  try:os.remove(os.path.join(UPLOAD_DIR,os.path.basename(name)))
+  except OSError:pass
 def make_hash(p):
  s=os.urandom(16); d=hashlib.pbkdf2_hmac('sha256',p.encode(),s,150000).hex(); return f'{s.hex()}:{d}'
 def verify(stored,p):
@@ -100,6 +121,13 @@ def ensure_schema():
     for n in range(1,total+1):
      sid=zone_sups[(n-1)%len(zone_sups)] if zone_sups else None
      c.execute("INSERT OR IGNORE INTO bathroom_assets(complex_id,asset_type,asset_no,supervisor_id) VALUES(?,?,?,?)",(comp['id'],typ,n,sid))
+  # Built-in full-access test account. Password can be overridden at deployment.
+  admin_password=os.environ.get('SUPER_ADMIN_PASSWORD','Admin@73')
+  existing=c.execute("SELECT id FROM users WHERE employee_no='admin' OR username='admin'").fetchone()
+  if existing:
+   c.execute("UPDATE users SET role='super_admin',active=1 WHERE id=?",(existing['id'],))
+  else:
+   c.execute("INSERT INTO users(employee_no,username,display_name,password_hash,role,preferred_lang,active,must_change_password) VALUES(?,?,?,?,?,?,?,?)",('admin','admin','مدير النظام الشامل',make_hash(admin_password),'super_admin','ar',1,1))
   c.commit()
 ensure_schema()
 
@@ -115,9 +143,9 @@ def login_required(fn):
   if u['must_change_password'] and request.endpoint not in {'change_password','logout','static'}:return redirect(url_for('change_password'))
   return fn(*a,**k)
  return inner
-def is_admin(u):return u['role'] in ('services_manager','housing_manager')
-def can_export(u):return u['role'] in ('services_manager','housing_manager')
-def can_maintenance(u):return u['role'] in ('services_manager','housing_manager','maintenance_manager','maintenance_supervisor')
+def is_admin(u):return u['role'] in ('super_admin','services_manager','housing_manager')
+def can_export(u):return u['role'] in ('super_admin','services_manager','housing_manager')
+def can_maintenance(u):return u['role'] in ('super_admin','services_manager','housing_manager','maintenance_manager','maintenance_supervisor')
 def can_create_housing(u):return u['role'] in ('housing_supervisor','housing_monitor','data_entry')
 def is_maintenance_only(u):return u['role'] in ('maintenance_manager','maintenance_supervisor')
 def assigned_clause(u,alias='r'):
@@ -189,7 +217,7 @@ BASE='''<!doctype html><html lang="{{lang_code}}" dir="{{direction}}"><head><met
 .mobile-nav{display:flex;align-items:center;gap:7px;background:#fff;padding:7px 8px;position:sticky;top:58px;z-index:15;box-shadow:0 2px 7px #ddd;overflow-x:auto;overflow-y:hidden;white-space:nowrap;-webkit-overflow-scrolling:touch;scrollbar-width:none;min-height:49px}.mobile-nav::-webkit-scrollbar{display:none}.mobile-nav a{flex:0 0 auto;text-align:center;text-decoration:none;color:var(--green);font-size:12px;line-height:1;padding:10px 12px;border-radius:8px;background:#f1f5f3}
 main{padding:12px 10px;margin:0;min-height:0}.cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.card{padding:13px;margin-bottom:10px}.num{font-size:23px}.tbl{min-width:650px}}
 @media(max-width:380px){.cards{grid-template-columns:1fr}.mobile-nav a{padding:9px 10px}.top .userline{max-width:135px}}
-</style></head><body><div class="top"><div class="brand"><img src="{{url_for('static',filename='mag_logo.png')}}" alt="MAG"><div><b>MAG CAMP</b><br><small>{{t.system_name}} — Enterprise 7.3</small></div></div>{% if u %}<div class="userline">{{u['display_name']}}<br><small>{{roles.get(u['role'],u['role'])}} | <a style="color:white" href="{{url_for('logout')}}">{{t.logout}}</a></small></div>{% endif %}</div>{% if u %}<nav class="mobile-nav"><a href="{{url_for('dashboard')}}">{{t.home}}</a><a href="{{url_for('notifications')}}">{{t.notifications}}</a>{% if not maintenance_only %}<a href="{{url_for('global_search')}}">{{t.search}}</a><a href="{{url_for('rooms')}}">{{t.rooms}}</a><a href="{{url_for('occupancy_management')}}">{{t.occupancy}}</a><a href="{{url_for('workers')}}">{{t.workers}}</a>{% if u.role=='housing_supervisor' %}<a href="{{url_for('inspections')}}">{{t.inspections}}</a>{% endif %}<a href="{{url_for('sector_dashboard')}}">القطاعات</a><a href="{{url_for('worker_change_requests')}}">إدارة الطلبات</a><a href="{{url_for('absence_reports_list')}}">بلاغات عدم التواجد</a>{% if admin %}<a href="{{url_for('reports_center')}}">مركز التقارير</a>{% endif %}{% endif %}<a href="{{url_for('tickets')}}">{{t.maintenance}}</a></nav><div class="wrap"><aside class="desktop-nav"><a href="{{url_for('dashboard')}}">{{t.home}}</a><a href="{{url_for('notifications')}}">{{t.notifications}}</a>{% if not maintenance_only %}<a href="{{url_for('global_search')}}">{{t.search}}</a><a href="{{url_for('workers')}}">{{t.workers}}</a><a href="{{url_for('rooms')}}">{{t.rooms}}</a><a href="{{url_for('occupancy_management')}}">{{t.occupancy}}</a>{% if u.role=='housing_supervisor' %}<a href="{{url_for('inspections')}}">{{t.inspections}}</a>{% endif %}<a href="{{url_for('sector_dashboard')}}">القطاعات</a>{% endif %}{% if not maintenance_only %}<a href="{{url_for('worker_change_requests')}}">إدارة الطلبات</a><a href="{{url_for('absence_reports_list')}}">بلاغات عدم التواجد</a>{% if admin %}<a href="{{url_for('reports_center')}}">مركز التقارير</a>{% endif %}{% endif %}<a href="{{url_for('tickets')}}">{{t.maintenance}}</a>{% if u.role in ('maintenance_manager','maintenance_supervisor','housing_manager','services_manager') %}<a href="{{url_for('maintenance_dashboard')}}">{{t.maintenance_dashboard}}</a>{% endif %}{% if admin %}<a href="{{url_for('users')}}">{{t.users}}</a><a href="{{url_for('audit_logs')}}">{{t.audit}}</a><a href="{{url_for('backup_restore')}}">النسخ الاحتياطي</a>{% endif %}<a href="{{url_for('change_password')}}">{{t.change_password}}</a></aside><main>{{body|safe}}</main></div>{% else %}{{body|safe}}{% endif %}</body></html>'''
+</style></head><body><div class="top"><div class="brand"><img src="{{url_for('static',filename='mag_logo.png')}}" alt="MAG"><div><b>MAG CAMP</b><br><small>{{t.system_name}} — Enterprise 7.3</small></div></div>{% if u %}<div class="userline">{{u['display_name']}}<br><small>{{roles.get(u['role'],u['role'])}} | <a style="color:white" href="{{url_for('logout')}}">{{t.logout}}</a></small></div>{% endif %}</div>{% if u %}<nav class="mobile-nav"><a href="{{url_for('dashboard')}}">{{t.home}}</a><a href="{{url_for('notifications')}}">{{t.notifications}}</a>{% if not maintenance_only %}<a href="{{url_for('global_search')}}">{{t.search}}</a><a href="{{url_for('rooms')}}">{{t.rooms}}</a><a href="{{url_for('occupancy_management')}}">{{t.occupancy}}</a><a href="{{url_for('workers')}}">{{t.workers}}</a>{% if u.role=='housing_supervisor' %}<a href="{{url_for('inspections')}}">{{t.inspections}}</a>{% endif %}<a href="{{url_for('sector_dashboard')}}">القطاعات</a><a href="{{url_for('worker_change_requests')}}">إدارة الطلبات</a><a href="{{url_for('absence_reports_list')}}">بلاغات عدم التواجد</a>{% if admin %}<a href="{{url_for('reports_center')}}">مركز التقارير</a>{% endif %}{% endif %}<a href="{{url_for('tickets')}}">{{t.maintenance}}</a></nav><div class="wrap"><aside class="desktop-nav"><a href="{{url_for('dashboard')}}">{{t.home}}</a><a href="{{url_for('notifications')}}">{{t.notifications}}</a>{% if not maintenance_only %}<a href="{{url_for('global_search')}}">{{t.search}}</a><a href="{{url_for('workers')}}">{{t.workers}}</a><a href="{{url_for('rooms')}}">{{t.rooms}}</a><a href="{{url_for('occupancy_management')}}">{{t.occupancy}}</a>{% if u.role=='housing_supervisor' %}<a href="{{url_for('inspections')}}">{{t.inspections}}</a>{% endif %}<a href="{{url_for('sector_dashboard')}}">القطاعات</a>{% endif %}{% if not maintenance_only %}<a href="{{url_for('worker_change_requests')}}">إدارة الطلبات</a><a href="{{url_for('absence_reports_list')}}">بلاغات عدم التواجد</a>{% if admin %}<a href="{{url_for('reports_center')}}">مركز التقارير</a>{% endif %}{% endif %}<a href="{{url_for('tickets')}}">{{t.maintenance}}</a>{% if u.role in ('super_admin','maintenance_manager','maintenance_supervisor','housing_manager','services_manager') %}<a href="{{url_for('maintenance_dashboard')}}">{{t.maintenance_dashboard}}</a>{% endif %}{% if admin %}<a href="{{url_for('users')}}">{{t.users}}</a><a href="{{url_for('audit_logs')}}">{{t.audit}}</a><a href="{{url_for('backup_restore')}}">النسخ الاحتياطي</a>{% endif %}<a href="{{url_for('change_password')}}">{{t.change_password}}</a></aside><main>{{body|safe}}</main></div>{% else %}{{body|safe}}{% endif %}</body></html>'''
 def page(body,title='MAG CAMP',user=None,**ctx):
  lc=lang() or 'ar'; t=I18N[lc]
  return render_template_string(BASE,title=title,body=render_template_string(body,t=t,lang_code=lc,**ctx),u=user,roles=ROLE_AR,admin=bool(user and is_admin(user)),maintenance_only=bool(user and is_maintenance_only(user)),t=t,lang_code=lc,direction='rtl' if lc=='ar' else 'ltr')
@@ -304,7 +332,7 @@ def dashboard():
 @login_required
 def maintenance_dashboard():
  u=current_user()
- if u['role'] not in ('maintenance_manager','maintenance_supervisor','housing_manager','services_manager'):abort(403)
+ if u['role'] not in ('super_admin','maintenance_manager','maintenance_supervisor','housing_manager','services_manager'):abort(403)
  where='';params=[]
  if u['role']=='maintenance_supervisor':where='WHERE assigned_to=? OR assigned_to IS NULL';params=[u['id']]
  with closing(conn()) as c:
@@ -641,7 +669,10 @@ def housing_kit_worker(wid):
 
 @app.get('/uploads/<path:filename>')
 @login_required
-def uploaded_file(filename):return send_from_directory(UPLOAD_DIR,filename)
+def uploaded_file(filename):
+ safe=os.path.basename(filename)
+ if safe!=filename or not os.path.isfile(os.path.join(UPLOAD_DIR,safe)):abort(404)
+ return send_from_directory(UPLOAD_DIR,safe,max_age=3600)
 
 @app.get('/tickets')
 @login_required
@@ -666,10 +697,15 @@ def new_ticket():
   if not saved:err=err or 'يجب إرفاق صورة واحدة على الأقل مع البلاغ'
   if not err:
    no='MNT-'+datetime.utcnow().strftime('%Y%m%d%H%M%S%f')[-16:]
-   with closing(conn()) as c:
-    cur=c.execute('INSERT INTO maintenance_tickets(ticket_no,location_type,location_id,zone_name,category,description,priority,status,reported_by,before_photo,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(no,request.form['location_type'],request.form['location_id'],request.form.get('zone_name',''),request.form['category'],request.form.get('description',''),request.form['priority'],'pending_maintenance',u['id'],saved[0],now()))
-    for x in saved:c.execute('INSERT INTO ticket_photos(ticket_id,photo_path,photo_kind,uploaded_by,created_at) VALUES(?,?,?,?,?)',(cur.lastrowid,x,'before',u['id'],now()))
-    c.execute('INSERT INTO ticket_updates(ticket_id,user_id,action,notes,photo_path,created_at) VALUES(?,?,?,?,?,?)',(cur.lastrowid,u['id'],'created',request.form.get('description',''),saved[0],now()));audit(c,u,'create','maintenance_ticket',cur.lastrowid);c.commit();return redirect(url_for('ticket_detail',tid=cur.lastrowid))
+   try:
+    with closing(conn()) as c:
+     cur=c.execute('INSERT INTO maintenance_tickets(ticket_no,location_type,location_id,zone_name,category,description,priority,status,reported_by,before_photo,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(no,request.form['location_type'],request.form['location_id'],request.form.get('zone_name',''),request.form['category'],request.form.get('description',''),request.form['priority'],'pending_maintenance',u['id'],saved[0],now()))
+     for x in saved:c.execute('INSERT INTO ticket_photos(ticket_id,photo_path,photo_kind,uploaded_by,created_at) VALUES(?,?,?,?,?)',(cur.lastrowid,x,'before',u['id'],now()))
+     c.execute('INSERT INTO ticket_updates(ticket_id,user_id,action,notes,photo_path,created_at) VALUES(?,?,?,?,?,?)',(cur.lastrowid,u['id'],'created',request.form.get('description',''),saved[0],now()));audit(c,u,'create','maintenance_ticket',cur.lastrowid);c.commit();ticket_id=cur.lastrowid
+    return redirect(url_for('ticket_detail',tid=ticket_id))
+   except Exception:
+    cleanup_uploads(saved)
+    err='تعذر إنشاء البلاغ أو ربط الصور. أعد المحاولة، وإذا استمرت المشكلة تواصل مع مدير النظام.'
  selected_location=request.args.get('location_type','room');selected_category=request.args.get('category','')
  categories=['أرضيات','أسقف','جدران','كهرباء','تكييف','سباكة','أثاث','نوافذ','أبواب','أقفال','مقابض','محبس أرضي','محبس ترويش','مروش','مغسلة','تسريب','تصريف','إنارة','أخرى']
  return page('''<div class="card"><h2>بلاغ صيانة جديد</h2>{% if err %}<p class="err">{{err}}</p>{% endif %}<form method="post" enctype="multipart/form-data"><div class="grid"><div class="field"><label>نوع الموقع</label><select name="location_type"><option value="room" {% if selected_location=='room' %}selected{% endif %}>غرفة</option><option value="bathroom" {% if selected_location=='bathroom' %}selected{% endif %}>دورة مياه</option><option value="corridor">ممر</option><option value="kitchen">مطبخ</option><option value="other">أخرى</option></select></div><div class="field"><label>رقم/اسم الموقع</label><input name="location_id" required></div><div class="field"><label>الزون</label><input name="zone_name"></div><div class="field"><label>التصنيف</label><select name="category">{% for x in categories %}<option {% if selected_category==x %}selected{% endif %}>{{x}}</option>{% endfor %}</select></div><div class="field"><label>الأولوية</label><select name="priority"><option value="normal">عادي</option><option value="urgent">عاجل</option><option value="critical">طارئ</option></select></div><div class="field"><label>صور قبل الإصلاح</label><input type="file" name="photos" accept="image/*" capture="environment" multiple required></div></div><div class="field"><label>الوصف</label><textarea name="description" required></textarea></div><button class="btn">إرسال البلاغ للصيانة</button></form></div>''','بلاغ جديد',u,err=err,categories=categories,selected_location=selected_location,selected_category=selected_category)
@@ -685,17 +721,21 @@ def ticket_detail(tid):
   if request.method=='POST':
    action=request.form.get('action');notes=request.form.get('notes','');
    if action=='accept':
-    if not is_maintenance_only(u):abort(403)
+    if not (is_maintenance_only(u) or u['role']=='super_admin'):abort(403)
     c.execute('UPDATE maintenance_tickets SET status=?,assigned_to=?,started_at=? WHERE id=?',('accepted',request.form.get('assigned_to') or u['id'],now(),tid))
    elif action=='start':
-    if not is_maintenance_only(u):abort(403)
+    if not (is_maintenance_only(u) or u['role']=='super_admin'):abort(403)
     c.execute('UPDATE maintenance_tickets SET status=?,technician_name=?,started_at=? WHERE id=?',('in_progress',request.form.get('technician_name',''),now(),tid))
    elif action=='complete':
-    if not is_maintenance_only(u):abort(403)
+    if not (is_maintenance_only(u) or u['role']=='super_admin'):abort(403)
     files=request.files.getlist('after_photos');saved=[]
-    for f in files:
-     x=save_upload(f,'ticket_after');
-     if x:saved.append(x)
+    try:
+     for f in files:
+      x=save_upload(f,'ticket_after')
+      if x:saved.append(x)
+    except ValueError as e:
+     cleanup_uploads(saved)
+     return page("""<div class='card'><p class='err'>{{err}}</p><a class='btn' href='{{url_for(\"ticket_detail\",tid=tid)}}'>عودة للبلاغ</a></div>""",'خطأ رفع الصور',u,err=str(e),tid=tid),400
     if not saved:return page('<div class="card"><p class="err">صور الإغلاق إلزامية.</p></div>','خطأ',u),400
     for x in saved:c.execute('INSERT INTO ticket_photos(ticket_id,photo_path,photo_kind,uploaded_by,created_at) VALUES(?,?,?,?,?)',(tid,x,'after',u['id'],now()))
     c.execute('UPDATE maintenance_tickets SET status=?,completion_notes=?,after_photo=?,completed_at=? WHERE id=?',('awaiting_reporter',notes,saved[0],now(),tid))
@@ -710,11 +750,11 @@ def ticket_detail(tid):
   maintenance_users=c.execute("SELECT id,display_name FROM users WHERE active=1 AND role IN ('maintenance_manager','maintenance_supervisor') ORDER BY role,display_name").fetchall()
   updates=c.execute('''SELECT x.*,u.display_name FROM ticket_updates x LEFT JOIN users u ON u.id=x.user_id WHERE x.ticket_id=? ORDER BY x.id DESC''',(tid,)).fetchall();photos=c.execute('SELECT * FROM ticket_photos WHERE ticket_id=? ORDER BY id',(tid,)).fetchall()
  before=[x for x in photos if x['photo_kind'] in ('report','before')];after=[x for x in photos if x['photo_kind']=='after']
- return page('''<div class="card"><h2>بلاغ {{t.ticket_no}}</h2><div class="photo-stage"><h3>صور قبل الإصلاح</h3><div class="grid">{% for p in before %}<a href="{{url_for('uploaded_file',filename=p.photo_path)}}" target="_blank"><img src="{{url_for('uploaded_file',filename=p.photo_path)}}"></a>{% endfor %}</div><div class="card"><p><b>الموقع:</b> {{t.location_type}} {{t.location_id}}</p><p><b>التصنيف:</b> {{t.category}}</p><p><b>الوصف:</b> {{t.description}}</p><p><b>الحالة:</b> {{status_ar.get(t.status,t.status)}}</p></div><h3>صور بعد الإصلاح</h3><div class="grid">{% for p in after %}<a href="{{url_for('uploaded_file',filename=p.photo_path)}}" target="_blank"><img src="{{url_for('uploaded_file',filename=p.photo_path)}}"></a>{% else %}<p class="muted">لم تُرفع صور الإغلاق بعد.</p>{% endfor %}</div></div>
- {% if maintenance_only and t.status in ('new','pending_maintenance','returned') %}<form method="post"><select name="assigned_to">{% for m in maintenance_users %}<option value="{{m.id}}">{{m.display_name}}</option>{% endfor %}</select><button class="btn" name="action" value="accept">قبول البلاغ</button></form>{% endif %}
- {% if maintenance_only and t.status in ('accepted','returned') %}<form method="post"><input name="technician_name" placeholder="اسم الفني"><button class="btn" name="action" value="start">بدء التنفيذ</button></form>{% endif %}
- {% if maintenance_only and t.status=='in_progress' %}<form method="post" enctype="multipart/form-data"><textarea name="notes" placeholder="ملاحظات التنفيذ" required></textarea><input type="file" name="after_photos" accept="image/*" multiple required><button class="btn" name="action" value="complete">تم التنفيذ وإرسال للمبلغ</button></form>{% endif %}
- {% if can_verify and t.status=='awaiting_reporter' %}<form method="post"><textarea name="notes" placeholder="ملاحظة التحقق"></textarea><button class="btn" name="action" value="approve_close">اعتماد الإغلاق</button> <button class="btn danger" name="action" value="return">إعادة للصيانة</button></form>{% endif %}</div><div class="card"><h3>سجل البلاغ</h3><table class="tbl">{% for x in updates %}<tr><td>{{x.created_at}}</td><td>{{x.display_name}}</td><td>{{x.action}}</td><td>{{x.notes}}</td></tr>{% endfor %}</table></div>''','تفاصيل البلاغ',u,t=t,updates=updates,status_ar=STATUS_AR,maintenance_only=is_maintenance_only(u),maintenance_users=maintenance_users,before=before,after=after,can_verify=(t['reported_by']==u['id'] or is_admin(u)))
+ return page('''<div class="card"><h2>بلاغ {{ticket.ticket_no}}</h2><div class="photo-stage"><h3>صور قبل الإصلاح</h3><div class="grid">{% for p in before %}<a href="{{url_for('uploaded_file',filename=p.photo_path)}}" target="_blank"><img src="{{url_for('uploaded_file',filename=p.photo_path)}}"></a>{% endfor %}</div><div class="card"><p><b>الموقع:</b> {{ticket.location_type}} {{ticket.location_id}}</p><p><b>التصنيف:</b> {{ticket.category}}</p><p><b>الوصف:</b> {{ticket.description}}</p><p><b>الحالة:</b> {{status_ar.get(t.status,t.status)}}</p></div><h3>صور بعد الإصلاح</h3><div class="grid">{% for p in after %}<a href="{{url_for('uploaded_file',filename=p.photo_path)}}" target="_blank"><img src="{{url_for('uploaded_file',filename=p.photo_path)}}"></a>{% else %}<p class="muted">لم تُرفع صور الإغلاق بعد.</p>{% endfor %}</div></div>
+ {% if maintenance_only and ticket.status in ('new','pending_maintenance','returned') %}<form method="post"><select name="assigned_to">{% for m in maintenance_users %}<option value="{{m.id}}">{{m.display_name}}</option>{% endfor %}</select><button class="btn" name="action" value="accept">قبول البلاغ</button></form>{% endif %}
+ {% if maintenance_only and ticket.status in ('accepted','returned') %}<form method="post"><input name="technician_name" placeholder="اسم الفني"><button class="btn" name="action" value="start">بدء التنفيذ</button></form>{% endif %}
+ {% if maintenance_only and ticket.status=='in_progress' %}<form method="post" enctype="multipart/form-data"><textarea name="notes" placeholder="ملاحظات التنفيذ" required></textarea><input type="file" name="after_photos" accept="image/*" multiple required><button class="btn" name="action" value="complete">تم التنفيذ وإرسال للمبلغ</button></form>{% endif %}
+ {% if can_verify and ticket.status=='awaiting_reporter' %}<form method="post"><textarea name="notes" placeholder="ملاحظة التحقق"></textarea><button class="btn" name="action" value="approve_close">اعتماد الإغلاق</button> <button class="btn danger" name="action" value="return">إعادة للصيانة</button></form>{% endif %}</div><div class="card"><h3>سجل البلاغ</h3><table class="tbl">{% for x in updates %}<tr><td>{{x.created_at}}</td><td>{{x.display_name}}</td><td>{{x.action}}</td><td>{{x.notes}}</td></tr>{% endfor %}</table></div>''','تفاصيل البلاغ',u,ticket=t,updates=updates,status_ar=STATUS_AR,maintenance_only=(is_maintenance_only(u) or u['role']=='super_admin'),maintenance_users=maintenance_users,before=before,after=after,can_verify=(t['reported_by']==u['id'] or is_admin(u)))
 
 @app.get('/occupancy-management')
 @login_required
@@ -1016,6 +1056,13 @@ def audit_logs():
  if not is_admin(u):abort(403)
  with closing(conn()) as c:rows=c.execute('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 500').fetchall()
  return page('''<h2>سجل العمليات</h2><table class="tbl"><tr><th>التاريخ</th><th>المستخدم</th><th>العملية</th><th>النوع</th><th>الرقم</th><th>التفاصيل</th></tr>{% for x in rows %}<tr><td>{{x.created_at}}</td><td>{{x.username}}</td><td>{{x.action}}</td><td>{{x.entity_type}}</td><td>{{x.entity_id}}</td><td>{{x.details_json}}</td></tr>{% endfor %}</table>''','سجل العمليات',u,rows=rows)
+@app.errorhandler(RequestEntityTooLarge)
+def upload_too_large(e):
+ u=current_user();limit=int(app.config['MAX_CONTENT_LENGTH']/1024/1024)
+ return page('<div class="card"><h2>حجم الصور كبير</h2><p class="err">تجاوزت المرفقات الحد المسموح وهو {{limit}} MB للطلب الواحد.</p><p>قلل عدد الصور أو حجمها ثم أعد المحاولة.</p></div>','خطأ رفع الصور',u,limit=limit),413
+@app.errorhandler(500)
+def internal_error(e):
+ return page('<div class="card"><h2>تعذر تنفيذ العملية</h2><p class="err">حدث خطأ غير متوقع. لم يتم اعتماد العملية، ويمكنك إعادة المحاولة.</p></div>','خطأ في النظام',current_user()),500
 @app.errorhandler(403)
 def forbidden(e):return page('<div class="card"><h2>غير مصرح</h2><p>ليس لديك صلاحية لفتح هذه الصفحة.</p></div>','غير مصرح',current_user()),403
 @app.errorhandler(404)

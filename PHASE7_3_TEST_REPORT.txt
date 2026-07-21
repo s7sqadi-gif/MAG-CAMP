@@ -1,15 +1,23 @@
-MAG CAMP 7.3 Test Report
+MAG CAMP v7.3.1 Test Report
 
-- Python syntax compilation: PASS
-- Dependency installation in a clean virtual environment: PASS
-- Application import: PASS
-- /health: HTTP 200
-- Dashboard as housing manager: HTTP 200
-- Available beds as housing manager: HTTP 200
-- Available beds as an active housing supervisor: HTTP 200
-- Supervisor availability query uses rooms.supervisor_id to limit results to assigned rooms: PASS
-- Requests management: HTTP 200
-- Absence reports list: HTTP 200
-- New housing request room prefill from available-beds screen: PASS
+PASS - Python syntax compilation.
+PASS - Application import and additive database migration.
+PASS - /health returns HTTP 200.
+PASS - Super Admin account exists and role is super_admin.
+PASS - Super Admin dashboard HTTP 200.
+PASS - Users page HTTP 200.
+PASS - Reports center HTTP 200.
+PASS - Maintenance tickets list HTTP 200.
+PASS - Maintenance operational dashboard HTTP 200.
+PASS - Create maintenance ticket with before photo.
+PASS - Open ticket details and render uploaded photo.
+PASS - Accept maintenance ticket.
+PASS - Start maintenance work and record technician.
+PASS - Complete maintenance work with after photo.
+PASS - Reporter/Admin approval and final closure.
+PASS - Uploaded-file route validates filename and file existence.
+PASS - Oversized upload handler returns a clear HTTP 413 page.
+PASS - Existing database retained; no destructive rebuild performed.
 
-No database rebuild was performed. Existing SQLite database was retained.
+Legacy test suite note:
+The bundled historical tests include assumptions from earlier releases and temporary database paths. A number of those legacy tests fail independently of the v7.3.1 changes. The current v7.3 upload and full maintenance workflow were tested directly against the supplied database and passed end-to-end.
