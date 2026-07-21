@@ -1,3 +1,5 @@
+MAG CAMP 7.2.0
+
 # MAG CAMP — Phase 4 Final Development Build
 
 Built additively on v4.6 Enterprise RC. The existing database and functionality are preserved.
