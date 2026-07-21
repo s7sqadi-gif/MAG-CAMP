@@ -1,0 +1,6 @@
+MAG CAMP 7.3 - Render Build Fix
+
+- Removed the python-bidi package dependency that failed during metadata generation on Python 3.14.
+- PDF Arabic rendering now uses the existing safe fallback in app.py.
+- No manual Render environment changes are required.
+- Upload the project files and deploy normally.

@@ -1188,12 +1188,10 @@ def attendance_export_pdf(bid):
  from reportlab.lib.styles import ParagraphStyle
  from reportlab.pdfbase import pdfmetrics
  from reportlab.pdfbase.ttfonts import TTFont
- import arabic_reshaper
- from bidi.algorithm import get_display
  b,rows,summary=attendance_export_data(bid,u);bio=io.BytesIO()
  try:pdfmetrics.registerFont(TTFont('Arabic','/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))
  except Exception:pass
- def ar(v):return get_display(arabic_reshaper.reshape(str(v or '')))
+ def ar(v):return ar_text(v)
  doc=SimpleDocTemplate(bio,pagesize=landscape(A3),rightMargin=24,leftMargin=24,topMargin=24,bottomMargin=24);style=ParagraphStyle('ar',fontName='Arabic',fontSize=10,alignment=2);title=ParagraphStyle('title',fontName='Arabic',fontSize=18,alignment=1,spaceAfter=16)
  story=[Paragraph(ar('MAG CAMP — تقرير حصر غياب العمالة'),title),Paragraph(ar(f'رقم الحصر: {b["batch_no"]} | التاريخ: {b["absence_date"]} | أعده: {b["creator"]}'),style),Spacer(1,12)]
  kpi=[[ar('إجمالي المتغيبين'),ar('المقيمون'),ar('غير المقيمين'),ar('لديهم غياب سابق')],[len(rows),sum(1 for x in rows if x['is_resident']),sum(1 for x in rows if not x['is_resident']),sum(1 for x in rows if x['previous_absences']>0)]];t=Table(kpi,colWidths=[180]*4,rowHeights=[30,38]);t.setStyle(TableStyle([('FONT',(0,0),(-1,-1),'Arabic'),('BACKGROUND',(0,0),(-1,0),colors.HexColor('#17365D')),('TEXTCOLOR',(0,0),(-1,0),colors.white),('ALIGN',(0,0),(-1,-1),'CENTER'),('GRID',(0,0),(-1,-1),0.5,colors.grey)]));story += [t,Spacer(1,16)]
