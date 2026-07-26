@@ -1,0 +1,11 @@
+MAG CAMP 7.3 - Stability Fix 2
+Date: 2026-07-26
+
+Fixed:
+1. Maintenance manager and maintenance supervisor can open and follow all maintenance tickets, including tickets assigned to the other maintenance officer. Assignment no longer causes a 403 Unauthorized page after acceptance.
+2. Maintenance ticket creation now supports adding multiple before-repair photos from mobile, one photo input at a time.
+3. Maintenance completion now supports adding multiple after-repair photos from mobile, one photo input at a time.
+4. Existing database and workflow remain unchanged.
+
+Deployment:
+Upload this release to Render and redeploy. Existing persistent database data is preserved when Render disk/database configuration remains unchanged.
