@@ -15,13 +15,24 @@ DB=os.environ.get('DATABASE_PATH',os.path.join(DATA_DIR,'mhoms.db'))
 UPLOAD_DIR=os.environ.get('UPLOAD_PATH',os.path.join(ROOT,'uploads')); os.makedirs(UPLOAD_DIR,exist_ok=True)
 app=Flask(__name__); app.secret_key=os.environ.get('SECRET_KEY','local-development-secret-change-me')
 app.config.update(SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Lax',SESSION_COOKIE_SECURE=os.environ.get('RENDER','').lower()=='true',MAX_CONTENT_LENGTH=int(os.environ.get('MAX_UPLOAD_MB','25'))*1024*1024)
+
+@app.errorhandler(RequestEntityTooLarge)
+def upload_too_large(_error):
+ return ('حجم الملف أكبر من الحد المسموح. صغّر الصور أو ارفع عددًا أقل في كل مرة.',413,{'Content-Type':'text/plain; charset=utf-8'})
+
 ROLE_AR={'super_admin':'مدير النظام الشامل','services_manager':'مدير الخدمات المساندة','housing_manager':'مدير السكن','housing_supervisor':'مشرف السكن','housing_monitor':'مراقب السكن','maintenance_manager':'مدير الصيانة','maintenance_supervisor':'مشرف الصيانة','data_entry':'مدخل بيانات'}
 REQ_AR={'transfer':'نقل عامل','final_exit':'خروج نهائي','outside_temp':'سكن خارجي مؤقت','outside_perm':'سكن خارجي دائم','add_worker':'إضافة عامل جديد','delete_worker':'حذف/أرشفة عامل'}
 STATUS_AR={'pending':'بانتظار الاعتماد','approved':'معتمد','rejected':'مرفوض','new':'جديد','in_progress':'قيد التنفيذ','completed':'مكتمل','verified':'تم التحقق','closed':'مغلق','pending_maintenance':'بانتظار قبول الصيانة','accepted':'مقبول من الصيانة','awaiting_reporter':'بانتظار اعتماد مقدم البلاغ','returned':'معاد للصيانة'}
 ROOM_USAGE_AR={'residential':'سكن عمال','warehouse':'مستودع','security':'حراسات الأمن الداخلي','contractor':'مقاول','administration':'إدارة','maintenance':'صيانة','laundry':'مغسلة','closed':'مغلق','out_of_service':'خارج الخدمة','other':'أخرى'}
 
 def conn():
- c=sqlite3.connect(DB,timeout=30); c.row_factory=sqlite3.Row; c.execute('PRAGMA foreign_keys=ON'); return c
+ c=sqlite3.connect(DB,timeout=30)
+ c.row_factory=sqlite3.Row
+ c.execute('PRAGMA foreign_keys=ON')
+ c.execute('PRAGMA busy_timeout=30000')
+ try:c.execute('PRAGMA journal_mode=WAL')
+ except sqlite3.DatabaseError:pass
+ return c
 
 def now(): return datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
 def saudi_today(): return datetime.now(ZoneInfo('Asia/Riyadh')).date()
@@ -120,12 +131,16 @@ def ensure_schema():
   # Final phase-4 bootstrap: geographic/even room ownership, protected management rooms, and numbered bathroom assets.
   supervisors=[r['id'] for r in c.execute("SELECT id FROM users WHERE role='housing_supervisor' AND active=1 ORDER BY id").fetchall()]
   rooms_for_assignment=c.execute("SELECT id,room_no,zone FROM rooms WHERE NOT (CAST(room_no AS INTEGER) BETWEEN 3801 AND 3816) ORDER BY CAST(zone AS INTEGER),CAST(room_no AS INTEGER),room_no").fetchall()
-  if supervisors and rooms_for_assignment:
+  # Bootstrap room ownership only on a fresh database. Re-running the old logic on
+  # every startup overwrote manual supervisor/sector assignments in production.
+  assigned_room_count=c.execute("SELECT COUNT(*) FROM rooms WHERE supervisor_id IS NOT NULL").fetchone()[0]
+  if supervisors and rooms_for_assignment and assigned_room_count==0:
    base=len(rooms_for_assignment)//len(supervisors); extra=len(rooms_for_assignment)%len(supervisors); pos=0
    for idx,sid in enumerate(supervisors):
     size=base+(1 if idx<extra else 0); batch=rooms_for_assignment[pos:pos+size]; pos+=size
     for rr in batch:c.execute("UPDATE rooms SET supervisor_id=?,sector_name=?,updated_at=COALESCE(updated_at,?) WHERE id=?",(sid,f'قطاع {idx+1}',now(),rr['id']))
-   c.execute("UPDATE rooms SET supervisor_id=NULL,sector_name='إدارة السكن' WHERE CAST(room_no AS INTEGER) BETWEEN 3801 AND 3816")
+  # Management rooms stay protected, but do not rewrite their sector on every boot.
+  c.execute("UPDATE rooms SET supervisor_id=NULL,sector_name=COALESCE(NULLIF(sector_name,''),'إدارة السكن') WHERE CAST(room_no AS INTEGER) BETWEEN 3801 AND 3816")
   for z in ('1','2','3','4'):
    c.execute("INSERT OR IGNORE INTO bathroom_complexes(complex_no,zone_name,name) VALUES(?,?,?)",(f'BC-{z}',z,f'مجمع دورات المياه - زون {z}'))
   complexes=c.execute("SELECT * FROM bathroom_complexes ORDER BY id").fetchall()
@@ -137,11 +152,14 @@ def ensure_schema():
      c.execute("INSERT OR IGNORE INTO bathroom_assets(complex_id,asset_type,asset_no,supervisor_id) VALUES(?,?,?,?)",(comp['id'],typ,n,sid))
   # Built-in full-access test account. Password can be overridden at deployment.
   admin_password=os.environ.get('SUPER_ADMIN_PASSWORD','Admin@73')
-  existing=c.execute("SELECT id FROM users WHERE employee_no='admin' OR username='admin'").fetchone()
+  existing=c.execute("SELECT id FROM users WHERE employee_no='admin' AND username='admin'").fetchone()
   if existing:
-   c.execute("UPDATE users SET role='super_admin',active=1 WHERE id=?",(existing['id'],))
+   c.execute("UPDATE users SET role='super_admin',active=1,display_name=COALESCE(NULLIF(display_name,''),'مدير النظام الشامل') WHERE id=?",(existing['id'],))
   else:
-   c.execute("INSERT INTO users(employee_no,username,display_name,password_hash,role,preferred_lang,active,must_change_password) VALUES(?,?,?,?,?,?,?,?)",('admin','admin','مدير النظام الشامل',make_hash(admin_password),'super_admin','ar',1,1))
+   # Never promote an unrelated user merely because one field happens to equal admin.
+   collision=c.execute("SELECT id FROM users WHERE employee_no='admin' OR username='admin'").fetchone()
+   if not collision:
+    c.execute("INSERT INTO users(employee_no,username,display_name,password_hash,role,preferred_lang,active,must_change_password) VALUES(?,?,?,?,?,?,?,?)",('admin','admin','مدير النظام الشامل',make_hash(admin_password),'super_admin','ar',1,1))
   c.commit()
 ensure_schema()
 
