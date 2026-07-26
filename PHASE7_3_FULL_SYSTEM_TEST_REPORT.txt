@@ -1,0 +1,25 @@
+MAG CAMP 7.3 - FULL PRE-DEPLOYMENT TEST REPORT
+Generated: 2026-07-23
+
+app.py | PASS | Python syntax/AST
+exit_feature.py | PASS | Python syntax/AST
+wsgi.py | PASS | Python syntax/AST
+data/mhoms.db | PASS | integrity=ok
+data/mhoms.db | PASS | core operational tables
+data/mhoms_phase2_backup.db | PASS | integrity=ok
+data/mhoms_phase2_backup.db | PASS | core operational tables
+app.py | PASS | CREATE TABLE IF NOT EXISTS password_change_logs
+app.py | PASS | def admin_monitor()
+app.py | PASS | url_for('admin_monitor')
+app.py | PASS | PRAGMA integrity_check
+app.py | PASS | SUPER_ADMIN_PASSWORD
+render.yaml | PASS | /var/data/mhoms.db
+render.yaml | PASS | /var/data/uploads
+render.yaml | PASS | healthCheckPath: /health
+render.yaml | PASS | plan: starter
+
+TOTAL: 16
+FAILED: 0
+
+Runtime migration note: password_change_logs and other newer tables are created automatically by ensure_schema() on application startup.
+Environment note: Full HTTP/browser runtime tests could not be executed here because the isolated environment cannot install Flask dependencies. Render will install requirements.txt during deployment.

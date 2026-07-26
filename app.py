@@ -73,6 +73,8 @@ def ensure_schema():
   CREATE TABLE IF NOT EXISTS maintenance_tickets(id INTEGER PRIMARY KEY AUTOINCREMENT,ticket_no TEXT NOT NULL UNIQUE,location_type TEXT NOT NULL,location_id TEXT NOT NULL,zone_name TEXT,category TEXT,description TEXT,priority TEXT DEFAULT 'normal',status TEXT DEFAULT 'new',reported_by INTEGER NOT NULL,verification_by INTEGER,assigned_to INTEGER,technician_name TEXT,part_name TEXT,completion_notes TEXT,before_photo TEXT,after_photo TEXT,created_at TEXT NOT NULL,started_at TEXT,completed_at TEXT,verified_at TEXT,closed_at TEXT);
   CREATE TABLE IF NOT EXISTS ticket_updates(id INTEGER PRIMARY KEY AUTOINCREMENT,ticket_id INTEGER NOT NULL,user_id INTEGER NOT NULL,action TEXT NOT NULL,notes TEXT,photo_path TEXT,created_at TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS audit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,username TEXT,action TEXT,entity_type TEXT,entity_id INTEGER,details_json TEXT,created_at TEXT);
+  CREATE TABLE IF NOT EXISTS password_change_logs(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,employee_no TEXT,display_name TEXT,changed_by INTEGER,change_type TEXT NOT NULL,created_at TEXT NOT NULL);
+  CREATE INDEX IF NOT EXISTS idx_password_change_logs_created ON password_change_logs(created_at,user_id);
   CREATE TABLE IF NOT EXISTS room_usage_history(id INTEGER PRIMARY KEY AUTOINCREMENT,room_id INTEGER NOT NULL,old_usage TEXT,new_usage TEXT NOT NULL,reason TEXT,changed_by INTEGER,changed_at TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS import_batches(id INTEGER PRIMARY KEY AUTOINCREMENT,file_name TEXT,rows_total INTEGER,workers_imported INTEGER,special_rooms INTEGER,created_by INTEGER,created_at TEXT);
   CREATE TABLE IF NOT EXISTS bathroom_reports(id INTEGER PRIMARY KEY AUTOINCREMENT,report_no TEXT NOT NULL UNIQUE,bathroom_no TEXT NOT NULL,zone_name TEXT,issue_type TEXT NOT NULL,description TEXT,priority TEXT DEFAULT 'normal',status TEXT DEFAULT 'new',reported_by INTEGER NOT NULL,maintenance_ticket_id INTEGER,created_at TEXT NOT NULL,closed_at TEXT);
@@ -231,7 +233,7 @@ BASE='''<!doctype html><html lang="{{lang_code}}" dir="{{direction}}"><head><met
 main{padding:12px 10px;margin:0;min-height:0;width:100%;max-width:100%;overflow:hidden}.tbl-wrap{width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}.tbl{min-width:980px}.cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.card{padding:13px;margin-bottom:10px}.num{font-size:23px}.tbl{min-width:650px}}
 @media(max-width:380px){.cards{grid-template-columns:1fr}.mobile-nav a{padding:9px 10px}.top .userline{max-width:135px}}
 .weekly-rest-row{background:#ffe5e5!important;border-right:5px solid #b91c1c}.repeat-row:not(.weekly-rest-row){background:#fff8d6}.same-room-badge{background:#7f1d1d;color:#fff;border-radius:999px;padding:3px 8px;font-size:12px}.filter-panel{position:sticky;top:108px;z-index:10}.filter-panel select,.filter-panel input{min-width:140px}.hidden-row{display:none!important}@media(max-width:760px){.filter-panel{position:static}.filter-panel .grid{grid-template-columns:1fr 1fr}.attendance-table{font-size:12px}}
-</style></head><body><div class="top"><div class="brand"><img src="{{url_for('static',filename='mag_logo.png')}}" alt="MAG"><div><b>MAG CAMP</b><br><small>{{t.system_name}} — Enterprise 7.3</small></div></div>{% if u %}<div class="userline">{{u['display_name']}}<br><small>{{roles.get(u['role'],u['role'])}} | <a style="color:white" href="{{url_for('logout')}}">{{t.logout}}</a></small></div>{% endif %}</div>{% if u %}<nav class="mobile-nav"><a href="{{url_for('dashboard')}}">{{t.home}}</a><a href="{{url_for('notifications')}}">{{t.notifications}}</a>{% if not maintenance_only %}<a href="{{url_for('global_search')}}">{{t.search}}</a><a href="{{url_for('rooms')}}">{{t.rooms}}</a><a href="{{url_for('occupancy_management')}}">{{t.occupancy}}</a><a href="{{url_for('workers')}}">{{t.workers}}</a>{% if u.role=='housing_supervisor' %}<a href="{{url_for('inspections')}}">{{t.inspections}}</a>{% endif %}<a href="{{url_for('sector_dashboard')}}">القطاعات</a><a href="{{url_for('worker_change_requests')}}">إدارة الطلبات</a><a href="{{url_for('absence_reports_list')}}">بلاغات عدم التواجد</a>{% if can_attendance %}<a href="{{url_for('attendance_batches')}}">حصر الغياب</a>{% endif %}{% if admin %}<a href="{{url_for('reports_center')}}">مركز التقارير</a>{% endif %}{% endif %}<a href="{{url_for('tickets')}}">{{t.maintenance}}</a></nav><div class="wrap"><aside class="desktop-nav"><a href="{{url_for('dashboard')}}">{{t.home}}</a><a href="{{url_for('notifications')}}">{{t.notifications}}</a>{% if not maintenance_only %}<a href="{{url_for('global_search')}}">{{t.search}}</a><a href="{{url_for('workers')}}">{{t.workers}}</a><a href="{{url_for('rooms')}}">{{t.rooms}}</a><a href="{{url_for('occupancy_management')}}">{{t.occupancy}}</a>{% if u.role=='housing_supervisor' %}<a href="{{url_for('inspections')}}">{{t.inspections}}</a>{% endif %}<a href="{{url_for('sector_dashboard')}}">القطاعات</a>{% endif %}{% if not maintenance_only %}<a href="{{url_for('worker_change_requests')}}">إدارة الطلبات</a><a href="{{url_for('absence_reports_list')}}">بلاغات عدم التواجد</a>{% if can_attendance %}<a href="{{url_for('attendance_batches')}}">حصر الغياب</a>{% endif %}{% if admin %}<a href="{{url_for('reports_center')}}">مركز التقارير</a>{% endif %}{% endif %}<a href="{{url_for('tickets')}}">{{t.maintenance}}</a>{% if u.role in ('super_admin','maintenance_manager','maintenance_supervisor','housing_manager','services_manager') %}<a href="{{url_for('maintenance_dashboard')}}">{{t.maintenance_dashboard}}</a>{% endif %}{% if admin %}<a href="{{url_for('users')}}">{{t.users}}</a><a href="{{url_for('audit_logs')}}">{{t.audit}}</a><a href="{{url_for('backup_restore')}}">النسخ الاحتياطي</a>{% endif %}<a href="{{url_for('change_password')}}">{{t.change_password}}</a></aside><main>{{body|safe}}</main></div>{% else %}{{body|safe}}{% endif %}</body></html>'''
+</style></head><body><div class="top"><div class="brand"><img src="{{url_for('static',filename='mag_logo.png')}}" alt="MAG"><div><b>MAG CAMP</b><br><small>{{t.system_name}} — Enterprise 7.3</small></div></div>{% if u %}<div class="userline">{{u['display_name']}}<br><small>{{roles.get(u['role'],u['role'])}} | <a style="color:white" href="{{url_for('change_password')}}">{{t.change_password}}</a> | <a style="color:white" href="{{url_for('logout')}}">{{t.logout}}</a></small></div>{% endif %}</div>{% if u %}<nav class="mobile-nav"><a href="{{url_for('dashboard')}}">{{t.home}}</a><a href="{{url_for('notifications')}}">{{t.notifications}}</a>{% if not maintenance_only %}<a href="{{url_for('global_search')}}">{{t.search}}</a><a href="{{url_for('rooms')}}">{{t.rooms}}</a><a href="{{url_for('occupancy_management')}}">{{t.occupancy}}</a><a href="{{url_for('workers')}}">{{t.workers}}</a>{% if u.role=='housing_supervisor' %}<a href="{{url_for('inspections')}}">{{t.inspections}}</a>{% endif %}<a href="{{url_for('sector_dashboard')}}">القطاعات</a><a href="{{url_for('worker_change_requests')}}">إدارة الطلبات</a><a href="{{url_for('worker_exit_requests')}}">إنهاء حالة عامل</a><a href="{{url_for('absence_reports_list')}}">بلاغات عدم التواجد</a>{% if can_attendance %}<a href="{{url_for('attendance_batches')}}">حصر الغياب</a>{% endif %}{% if admin %}<a href="{{url_for('reports_center')}}">مركز التقارير</a>{% endif %}{% endif %}<a href="{{url_for('tickets')}}">{{t.maintenance}}</a></nav><div class="wrap"><aside class="desktop-nav"><a href="{{url_for('dashboard')}}">{{t.home}}</a><a href="{{url_for('notifications')}}">{{t.notifications}}</a>{% if not maintenance_only %}<a href="{{url_for('global_search')}}">{{t.search}}</a><a href="{{url_for('workers')}}">{{t.workers}}</a><a href="{{url_for('rooms')}}">{{t.rooms}}</a><a href="{{url_for('occupancy_management')}}">{{t.occupancy}}</a>{% if u.role=='housing_supervisor' %}<a href="{{url_for('inspections')}}">{{t.inspections}}</a>{% endif %}<a href="{{url_for('sector_dashboard')}}">القطاعات</a>{% endif %}{% if not maintenance_only %}<a href="{{url_for('worker_change_requests')}}">إدارة الطلبات</a><a href="{{url_for('worker_exit_requests')}}">إنهاء حالة عامل</a><a href="{{url_for('absence_reports_list')}}">بلاغات عدم التواجد</a>{% if can_attendance %}<a href="{{url_for('attendance_batches')}}">حصر الغياب</a>{% endif %}{% if admin %}<a href="{{url_for('reports_center')}}">مركز التقارير</a>{% endif %}{% endif %}<a href="{{url_for('tickets')}}">{{t.maintenance}}</a>{% if u.role in ('super_admin','maintenance_manager','maintenance_supervisor','housing_manager','services_manager') %}<a href="{{url_for('maintenance_dashboard')}}">{{t.maintenance_dashboard}}</a>{% endif %}{% if admin %}<a href="{{url_for('users')}}">{{t.users}}</a><a href="{{url_for('admin_monitor')}}">مراقبة النظام</a><a href="{{url_for('password_change_admin')}}">سجل كلمات المرور</a><a href="{{url_for('audit_logs')}}">{{t.audit}}</a><a href="{{url_for('backup_restore')}}">النسخ الاحتياطي</a>{% endif %}<a href="{{url_for('change_password')}}">{{t.change_password}}</a></aside><main>{{body|safe}}</main></div>{% else %}{{body|safe}}{% endif %}</body></html>'''
 def page(body,title='MAG CAMP',user=None,**ctx):
  lc=lang() or 'ar'; t=I18N[lc]
  return render_template_string(BASE,title=title,body=render_template_string(body,t=t,lang_code=lc,**ctx),u=user,roles=ROLE_AR,admin=bool(user and is_admin(user)),maintenance_only=bool(user and is_maintenance_only(user)),can_attendance=bool(user and can_attendance(user)),t=t,lang_code=lc,direction='rtl' if lc=='ar' else 'ltr')
@@ -281,7 +283,11 @@ def change_password():
   elif len(new)<6:err='كلمة المرور الجديدة يجب ألا تقل عن 6 أحرف أو أرقام'
   elif new!=conf:err='تأكيد كلمة المرور غير مطابق'
   else:
-   with closing(conn()) as c:c.execute('UPDATE users SET password_hash=?,must_change_password=0 WHERE id=?',(make_hash(new),u['id']));audit(c,u,'change_password','user',u['id']);c.commit();ok='تم تغيير كلمة المرور بنجاح'
+   with closing(conn()) as c:
+    c.execute('UPDATE users SET password_hash=?,must_change_password=0 WHERE id=?',(make_hash(new),u['id']))
+    c.execute('INSERT INTO password_change_logs(user_id,employee_no,display_name,changed_by,change_type,created_at) VALUES(?,?,?,?,?,?)',(u['id'],u['employee_no'],u['display_name'],u['id'],'self_change',now()))
+    audit(c,u,'change_password','user',u['id'],{'employee_no':u['employee_no'],'change_type':'self_change'})
+    c.commit();ok='تم تغيير كلمة المرور بنجاح'
  return page('''<div class="card"><h2>تغيير كلمة المرور</h2>{% if err %}<p class="err">{{err}}</p>{% endif %}{% if ok %}<p class="ok">{{ok}}</p><a class="btn" href="{{url_for('dashboard')}}">{{t.home}}</a>{% else %}<form method="post"><input class="search" type="password" name="current_password" placeholder="الحالية" required><input class="search" type="password" name="new_password" placeholder="الجديدة" required><input class="search" type="password" name="confirm_password" placeholder="التأكيد" required><button class="btn">حفظ</button></form>{% endif %}</div>''','تغيير كلمة المرور',u,err=err,ok=ok)
 
 @app.get('/')
@@ -1265,13 +1271,88 @@ def notifications():
  items=sorted(items,key=lambda x:x['at'] or '',reverse=True)
  return page('''<h2>{{t.notifications}}</h2>{% for x in items %}<a class="card" style="display:block;color:inherit;text-decoration:none" href="{{x.url}}"><b>{{x.title}}</b><p>{{x.text}}</p><small>{{x.at}}</small></a>{% else %}<div class="card">لا توجد إشعارات حالية.</div>{% endfor %}''',tr('notifications'),u,items=items)
 
+@app.get('/admin/monitor')
+@login_required
+def admin_monitor():
+ u=current_user()
+ if u['role']!='super_admin':abort(403)
+ db_size=os.path.getsize(DB) if os.path.exists(DB) else 0
+ upload_size=0;upload_files=0
+ try:
+  for root,dirs,files in os.walk(UPLOAD):
+   for name in files:
+    fp=os.path.join(root,name)
+    try:upload_size+=os.path.getsize(fp);upload_files+=1
+    except OSError:pass
+ except OSError:pass
+ with closing(conn()) as c:
+  integrity=c.execute('PRAGMA integrity_check').fetchone()[0]
+  stats={
+   'users':c.execute('SELECT COUNT(*) FROM users WHERE active=1').fetchone()[0],
+   'recent_users':c.execute("SELECT COUNT(*) FROM users WHERE active=1 AND last_login IS NOT NULL AND datetime(last_login)>=datetime('now','-30 minutes')").fetchone()[0],
+   'open_tickets':c.execute("SELECT COUNT(*) FROM maintenance_tickets WHERE status NOT IN ('closed','verified')").fetchone()[0],
+   'pending_housing':c.execute("SELECT COUNT(*) FROM housing_actions WHERE final_status NOT IN ('approved','rejected')").fetchone()[0],
+   'open_absence':c.execute("SELECT COUNT(*) FROM absence_reports WHERE status NOT IN ('closed','rejected')").fetchone()[0],
+   'inspections_today':c.execute("SELECT COUNT(*) FROM inspections WHERE date(created_at)=date('now')").fetchone()[0],
+  }
+  recent_logins=c.execute("SELECT employee_no,display_name,role,last_login FROM users WHERE last_login IS NOT NULL ORDER BY last_login DESC LIMIT 30").fetchall()
+  password_rows=c.execute("SELECT employee_no,display_name,change_type,created_at FROM password_change_logs ORDER BY id DESC LIMIT 20").fetchall()
+  audit_rows=c.execute("SELECT username,action,entity_type,entity_id,created_at FROM audit_logs ORDER BY id DESC LIMIT 30").fetchall()
+ def human_size(n):
+  n=float(n or 0)
+  for unit in ('B','KB','MB','GB','TB'):
+   if n<1024:return f'{n:.1f} {unit}'
+   n/=1024
+  return f'{n:.1f} PB'
+ return page('''<h2>لوحة مراقبة النظام — Admin</h2>
+ <div class="cards">
+  <div class="card"><div class="muted">المستخدمون النشطون</div><div class="num">{{stats.users}}</div></div>
+  <div class="card"><div class="muted">دخلوا خلال 30 دقيقة</div><div class="num">{{stats.recent_users}}</div></div>
+  <div class="card"><div class="muted">بلاغات الصيانة المفتوحة</div><div class="num">{{stats.open_tickets}}</div></div>
+  <div class="card"><div class="muted">طلبات السكن المعلقة</div><div class="num">{{stats.pending_housing}}</div></div>
+  <div class="card"><div class="muted">بلاغات عدم التواجد</div><div class="num">{{stats.open_absence}}</div></div>
+  <div class="card"><div class="muted">جولات اليوم</div><div class="num">{{stats.inspections_today}}</div></div>
+ </div>
+ <div class="grid">
+  <div class="card"><h3>حالة التخزين</h3><p><b>قاعدة البيانات:</b> {{db_size}}</p><p><b>المرفقات:</b> {{upload_size}} ({{upload_files}} ملف)</p><p><b>سلامة القاعدة:</b> <span class="badge {{'red' if integrity!='ok' else ''}}">{{integrity}}</span></p><p class="muted">عدد من دخلوا خلال 30 دقيقة مؤشر نشاط تقريبي، وليس اتصالًا مباشرًا لحظيًا.</p></div>
+  <div class="card"><h3>روابط الإدارة</h3><p><a class="btn" href="{{url_for('users')}}">المستخدمون</a> <a class="btn btn2" href="{{url_for('password_change_admin')}}">كلمات المرور</a></p><p><a class="btn" href="{{url_for('audit_logs')}}">سجل العمليات</a> <a class="btn btn2" href="{{url_for('backup_restore')}}">النسخ الاحتياطي</a></p></div>
+ </div>
+ <div class="card"><h3>آخر عمليات تسجيل الدخول</h3><div class="tbl-wrap"><table class="tbl"><tr><th>الرقم</th><th>الاسم</th><th>الدور</th><th>آخر دخول</th></tr>{% for x in recent_logins %}<tr><td>{{x.employee_no}}</td><td>{{x.display_name}}</td><td>{{roles.get(x.role,x.role)}}</td><td>{{x.last_login}}</td></tr>{% else %}<tr><td colspan="4">لا توجد عمليات دخول مسجلة.</td></tr>{% endfor %}</table></div></div>
+ <div class="card"><h3>آخر تغييرات كلمات المرور</h3><div class="tbl-wrap"><table class="tbl"><tr><th>التاريخ</th><th>الرقم</th><th>الموظف</th><th>النوع</th></tr>{% for x in password_rows %}<tr><td>{{x.created_at}}</td><td>{{x.employee_no}}</td><td>{{x.display_name}}</td><td>{{'تغيير ذاتي' if x.change_type=='self_change' else 'إعادة تعيين من Admin'}}</td></tr>{% else %}<tr><td colspan="4">لا توجد تغييرات.</td></tr>{% endfor %}</table></div></div>
+ <div class="card"><h3>آخر عمليات النظام</h3><div class="tbl-wrap"><table class="tbl"><tr><th>التاريخ</th><th>المستخدم</th><th>العملية</th><th>النوع</th><th>الرقم</th></tr>{% for x in audit_rows %}<tr><td>{{x.created_at}}</td><td>{{x.username}}</td><td>{{x.action}}</td><td>{{x.entity_type}}</td><td>{{x.entity_id or '-'}}</td></tr>{% else %}<tr><td colspan="5">لا توجد عمليات.</td></tr>{% endfor %}</table></div></div>''','مراقبة النظام',u,stats=stats,recent_logins=recent_logins,password_rows=password_rows,audit_rows=audit_rows,roles=ROLE_AR,db_size=human_size(db_size),upload_size=human_size(upload_size),upload_files=upload_files,integrity=integrity)
+
 @app.get('/users')
 @login_required
 def users():
  u=current_user()
  if not is_admin(u):abort(403)
  with closing(conn()) as c:rows=c.execute("SELECT u.*,GROUP_CONCAT(a.room_text,'، ') room_text FROM users u LEFT JOIN assignments a ON a.user_id=u.id GROUP BY u.id ORDER BY u.active DESC,u.role,u.display_name").fetchall()
- return page('''<h2>المستخدمون والصلاحيات</h2><table class="tbl"><tr><th>الرقم</th><th>الاسم</th><th>الدور</th><th>النطاق</th><th>الحالة</th></tr>{% for x in rows %}<tr><td>{{x.employee_no}}</td><td>{{x.display_name}}</td><td>{{roles.get(x.role,x.role)}}</td><td>{{x.room_text or '-'}}</td><td>{{'نشط' if x.active else 'موقوف'}}</td></tr>{% endfor %}</table>''','المستخدمون',u,rows=rows,roles=ROLE_AR)
+ return page('''<h2>المستخدمون والصلاحيات</h2><p><a class="btn" href="{{url_for('password_change_admin')}}">فتح سجل تغييرات كلمات المرور</a></p><table class="tbl"><tr><th>الرقم</th><th>الاسم</th><th>الدور</th><th>النطاق</th><th>الحالة</th><th>إدارة كلمة المرور</th></tr>{% for x in rows %}<tr><td>{{x.employee_no}}</td><td>{{x.display_name}}</td><td>{{roles.get(x.role,x.role)}}</td><td>{{x.room_text or '-'}}</td><td>{{'نشط' if x.active else 'موقوف'}}</td><td><form method="post" action="{{url_for('admin_reset_password',user_id=x.id)}}" onsubmit="return confirm('تعيين كلمة مرور مؤقتة لهذا الموظف؟')"><input name="temporary_password" type="password" minlength="6" placeholder="كلمة مؤقتة" required><button class="btn">تعيين</button></form></td></tr>{% endfor %}</table>''','المستخدمون',u,rows=rows,roles=ROLE_AR)
+@app.get('/admin/password-changes')
+@login_required
+def password_change_admin():
+ u=current_user()
+ if u['role']!='super_admin':abort(403)
+ with closing(conn()) as c:
+  rows=c.execute("SELECT p.*,cu.display_name changed_by_name FROM password_change_logs p LEFT JOIN users cu ON cu.id=p.changed_by ORDER BY p.id DESC LIMIT 1000").fetchall()
+ return page('''<h2>سجل تغييرات كلمات المرور</h2><p class="muted">لأسباب أمنية لا يتم حفظ أو عرض كلمات المرور نفسها. يظهر فقط من غيّرها ووقت التغيير ونوع العملية.</p><div class="tbl-wrap"><table class="tbl"><tr><th>التاريخ</th><th>الرقم الوظيفي</th><th>الموظف</th><th>نوع التغيير</th><th>تم بواسطة</th></tr>{% for x in rows %}<tr><td>{{x.created_at}}</td><td>{{x.employee_no}}</td><td>{{x.display_name}}</td><td>{{'تغيير بواسطة الموظف' if x.change_type=='self_change' else 'إعادة تعيين بواسطة الأدمن'}}</td><td>{{x.changed_by_name or '-'}}</td></tr>{% else %}<tr><td colspan="5">لا توجد تغييرات مسجلة.</td></tr>{% endfor %}</table></div>''','سجل كلمات المرور',u,rows=rows)
+
+@app.post('/admin/users/<int:user_id>/reset-password')
+@login_required
+def admin_reset_password(user_id):
+ u=current_user()
+ if u['role']!='super_admin':abort(403)
+ temporary=request.form.get('temporary_password','')
+ if len(temporary)<6:abort(400)
+ with closing(conn()) as c:
+  target=c.execute('SELECT * FROM users WHERE id=?',(user_id,)).fetchone()
+  if not target:abort(404)
+  c.execute('UPDATE users SET password_hash=?,must_change_password=1 WHERE id=?',(make_hash(temporary),user_id))
+  c.execute('INSERT INTO password_change_logs(user_id,employee_no,display_name,changed_by,change_type,created_at) VALUES(?,?,?,?,?,?)',(target['id'],target['employee_no'],target['display_name'],u['id'],'admin_reset',now()))
+  audit(c,u,'admin_reset_password','user',user_id,{'employee_no':target['employee_no']})
+  c.commit()
+ return redirect(url_for('password_change_admin'))
+
 @app.get('/audit-logs')
 @login_required
 def audit_logs():
@@ -1279,6 +1360,9 @@ def audit_logs():
  if not is_admin(u):abort(403)
  with closing(conn()) as c:rows=c.execute('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 500').fetchall()
  return page('''<h2>سجل العمليات</h2><table class="tbl"><tr><th>التاريخ</th><th>المستخدم</th><th>العملية</th><th>النوع</th><th>الرقم</th><th>التفاصيل</th></tr>{% for x in rows %}<tr><td>{{x.created_at}}</td><td>{{x.username}}</td><td>{{x.action}}</td><td>{{x.entity_type}}</td><td>{{x.entity_id}}</td><td>{{x.details_json}}</td></tr>{% endfor %}</table>''','سجل العمليات',u,rows=rows)
+from exit_feature import init_exit_feature
+init_exit_feature(app,conn,now,current_user,login_required,is_admin,page,audit,saudi_today)
+
 @app.errorhandler(RequestEntityTooLarge)
 def upload_too_large(e):
  u=current_user();limit=int(app.config['MAX_CONTENT_LENGTH']/1024/1024)

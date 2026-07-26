@@ -1,0 +1,19 @@
+MAG CAMP 7.3 — Admin Monitor & Stabilization
+
+Added without removing or replacing existing operational data:
+- Dedicated Admin system-monitor page.
+- Active user count and users who logged in during the last 30 minutes.
+- Latest login activity.
+- Latest password-change activity.
+- Latest system audit activity.
+- Open maintenance tickets, pending housing requests, open absence reports, and today's inspections.
+- Database size, uploads size/file count, and live SQLite integrity result.
+- Direct links to users, password log, audit log, and backup tools.
+
+Security:
+- Monitor page is restricted to super_admin only.
+- Password values are never displayed or stored in activity logs.
+
+Deployment:
+- Existing database files remain included.
+- Persistent Render paths remain /var/data/mhoms.db and /var/data/uploads.

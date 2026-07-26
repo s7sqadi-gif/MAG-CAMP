@@ -1,0 +1,16 @@
+MAG CAMP 7.3 - Persistent Storage + Worker Exit Workflow
+
+1) Persistent storage on Render
+- Database moved to /var/data/mhoms.db through DATABASE_PATH.
+- Uploads moved to /var/data/uploads through UPLOAD_PATH.
+- render.yaml now provisions a 1 GB persistent disk.
+- Render persistent disks require a paid web-service plan; the blueprint uses Starter.
+
+2) Worker exit workflow
+- Search worker by employee number.
+- Exit types: final exit, left and did not return, absconding, deceased, project transfer, resignation, termination, other.
+- Approval sequence: Housing Manager then Support Services Manager.
+- After final approval the worker is removed from active accommodation, room/bed becomes vacant immediately, and the complete worker record is copied to a separate archive.
+
+3) Excel export
+- Exports current and exited workers in one workbook with full available details and exit status.
