@@ -1,0 +1,11 @@
+MAG CAMP 8.3.3 — Fixed Bundled Source Recovery
+
+Root cause fixed:
+DATABASE_PATH on Render can point to an empty persistent file. Earlier releases incorrectly used that path as the SQLite migration source, so PostgreSQL remained without the 7.3 workers and rooms.
+
+This release always migrates from the verified bundled data/mhoms.db, independently of DATABASE_PATH.
+Expected bundled counts: workers=4375, rooms=974, users=20, bathroom_complexes=4.
+
+Expected Render log:
+[MAG CAMP] Recovery source fixed to bundled SQLite: .../data/mhoms.db
+[MAG CAMP] PostgreSQL migration verified: all SQLite tables and row counts verified

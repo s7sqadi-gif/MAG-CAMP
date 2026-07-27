@@ -9,10 +9,14 @@ from werkzeug.exceptions import RequestEntityTooLarge
 from flask import Flask, abort, redirect, render_template_string, request, session, url_for, send_from_directory, send_file
 from database import connect as database_connect, column_names as database_column_names, IS_POSTGRES
 
-APP_VERSION='8.3.2'
-RELEASE_NAME='8.3.2-stable-data-recovery-from-7.3'
+APP_VERSION='8.3.3'
+RELEASE_NAME='8.3.3-fixed-bundled-source-recovery'
 ROOT=os.path.dirname(os.path.abspath(__file__)); DATA_DIR=os.path.join(ROOT,'data'); os.makedirs(DATA_DIR,exist_ok=True)
 DB=os.environ.get('DATABASE_PATH',os.path.join(DATA_DIR,'mhoms.db'))
+# The PostgreSQL recovery source must always be the verified database bundled
+# with this release. DATABASE_PATH may point to an empty Render disk file and
+# must never be used as the migration source.
+BUNDLED_SQLITE_SOURCE=os.path.join(DATA_DIR,'mhoms.db')
 UPLOAD_DIR=os.environ.get('UPLOAD_PATH',os.path.join(ROOT,'uploads')); os.makedirs(UPLOAD_DIR,exist_ok=True)
 app=Flask(__name__); app.secret_key=os.environ.get('SECRET_KEY','local-development-secret-change-me')
 app.config.update(SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Lax',SESSION_COOKIE_SECURE=os.environ.get('RENDER','').lower()=='true',MAX_CONTENT_LENGTH=int(os.environ.get('MAX_UPLOAD_MB','25'))*1024*1024)
@@ -86,9 +90,11 @@ def bootstrap_postgres_from_sqlite():
     if not IS_POSTGRES or os.environ.get('AUTO_MIGRATE_SQLITE', '1') != '1':
         return
 
-    sqlite_path = Path(DB)
+    sqlite_path = Path(BUNDLED_SQLITE_SOURCE)
     if not sqlite_path.exists() or sqlite_path.stat().st_size == 0:
+        print(f'[MAG CAMP] Bundled recovery database missing or empty: {sqlite_path}', file=sys.stderr, flush=True)
         return
+    print(f'[MAG CAMP] Recovery source fixed to bundled SQLite: {sqlite_path} ({sqlite_path.stat().st_size} bytes)', flush=True)
 
     def migration_already_verified():
         try:
@@ -100,7 +106,7 @@ def bootstrap_postgres_from_sqlite():
                 )""")
                 row = c.execute(
                     'SELECT migration_key FROM magcamp_migrations WHERE migration_key=?',
-                    ('sqlite_to_postgres_8_3_2_stable_data',)
+                    ('sqlite_to_postgres_8_3_3_fixed_source',)
                 ).fetchone()
                 c.commit()
                 return bool(row)
@@ -150,7 +156,7 @@ def bootstrap_postgres_from_sqlite():
                    ON CONFLICT (migration_key) DO UPDATE SET
                      completed_at=EXCLUDED.completed_at,
                      details=EXCLUDED.details""",
-                ('sqlite_to_postgres_8_3_2_stable_data', now(), details)
+                ('sqlite_to_postgres_8_3_3_fixed_source', now(), details)
             )
             c.commit()
 
