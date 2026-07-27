@@ -1,0 +1,7 @@
+MAG CAMP 8.2.3 — PostgreSQL Compatibility & Dashboard Fix
+
+- Fixed dashboard crash on PostgreSQL caused by SELECT DISTINCT with an ORDER BY expression not present in the SELECT list.
+- Fixed the same PostgreSQL incompatibility in worker zones, supervisor zones, and available-bed filters.
+- Fixed available-beds aggregation by including the joined supervisor name in GROUP BY.
+- Preserved SQLite compatibility.
+- No database reset, deletion, or remigration is required.
