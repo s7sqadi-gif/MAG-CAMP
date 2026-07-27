@@ -1,0 +1,25 @@
+MAG CAMP 8.1 — Verified Data Migration
+
+- Upgraded application identity to Enterprise 8.1.
+- Hardened SQLite-to-PostgreSQL migration with:
+  * SQLite integrity preflight.
+  * Transactional migration and rollback on failure.
+  * Protection against accidental migration into a non-empty target.
+  * Per-table source/target row-count verification.
+  * PostgreSQL sequence repair after ID migration.
+  * JSON migration report.
+- Added verify_postgres.py for post-migration checks.
+- Improved SQLite SQL compatibility translation for PostgreSQL:
+  * date(column) and datetime(column)
+  * relative current-time expressions
+  * scalar MIN/MAX mapped to LEAST/GREATEST
+- Kept SQLite fallback for local development.
+
+Safe migration command:
+  DATABASE_URL='...' python migrate_sqlite_to_postgres.py
+
+To intentionally merge into a non-empty target:
+  ALLOW_NONEMPTY_TARGET=1 DATABASE_URL='...' python migrate_sqlite_to_postgres.py
+
+Post-migration verification:
+  DATABASE_URL='...' python verify_postgres.py

@@ -1,4 +1,4 @@
-"""Database compatibility layer for MAG CAMP 8.0.
+"""Database compatibility layer for MAG CAMP 8.1.
 
 Uses SQLite when DATABASE_URL is absent, and PostgreSQL (Supabase/Render)
 when DATABASE_URL starts with postgresql:// or postgres://.
@@ -74,9 +74,15 @@ def _translate_sql(sql: str) -> str:
     sql = re.sub(r"\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b", "BIGSERIAL PRIMARY KEY", sql, flags=re.I)
     sql = re.sub(r"\bAUTOINCREMENT\b", "", sql, flags=re.I)
     sql = re.sub(r"INSERT\s+OR\s+IGNORE\s+INTO", "INSERT INTO", sql, flags=re.I)
-    sql = sql.replace("datetime('now')", "CURRENT_TIMESTAMP")
-    sql = sql.replace("date('now')", "CURRENT_DATE")
-    sql = re.sub(r"datetime\('now','-30 minutes'\)", "(CURRENT_TIMESTAMP - INTERVAL '30 minutes')", sql, flags=re.I)
+    sql = re.sub(r"datetime\('now'\s*,\s*'-([0-9]+) minutes'\)", r"(CURRENT_TIMESTAMP - INTERVAL '\\1 minutes')", sql, flags=re.I)
+    sql = re.sub(r"datetime\('now'\)", "CURRENT_TIMESTAMP", sql, flags=re.I)
+    sql = re.sub(r"date\('now'\)", "CURRENT_DATE", sql, flags=re.I)
+    # SQLite date()/datetime() wrappers used around columns.
+    sql = re.sub(r"\bdate\(([^()]+)\)", r"CAST(\1 AS DATE)", sql, flags=re.I)
+    sql = re.sub(r"\bdatetime\(([^()]+)\)", r"CAST(\1 AS TIMESTAMP)", sql, flags=re.I)
+    # SQLite scalar MIN/MAX with two arguments map to PostgreSQL LEAST/GREATEST.
+    sql = re.sub(r"\bMIN\(([^,()]+),\s*([^()]+)\)", r"LEAST(\1, \2)", sql, flags=re.I)
+    sql = re.sub(r"\bMAX\(([^,()]+),\s*([^()]+)\)", r"GREATEST(\1, \2)", sql, flags=re.I)
     # SQLite positional placeholders to psycopg placeholders.
     sql = sql.replace("?", "%s")
     # For former INSERT OR IGNORE statements, conflict-safe behavior.
