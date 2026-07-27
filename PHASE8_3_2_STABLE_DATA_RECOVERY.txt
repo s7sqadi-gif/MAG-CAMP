@@ -1,0 +1,23 @@
+MAG CAMP Enterprise 8.3.2 — Stable Data Recovery
+
+Purpose
+- Keep the stable 7.3 application workflow.
+- Recover the bundled stable SQLite data into PostgreSQL/Supabase when an older migration marker exists but critical tables are empty or incomplete.
+
+Fixes
+1. Uses a new migration marker: sqlite_to_postgres_8_3_2_stable_data.
+2. A marker is no longer trusted without a full source/target row-count verification.
+3. If PostgreSQL has fewer rows than the bundled stable database, migration runs again safely with ON CONFLICT DO NOTHING.
+4. Verifies every SQLite table after migration before writing the new marker.
+5. Preserves existing passwords and roles; no mass password reset is performed.
+
+Bundled stable data counts
+- users: 20
+- rooms: 974
+- workers: 4375
+- bathroom_complexes: 4
+
+Expected Render log after successful first boot
+[MAG CAMP] PostgreSQL migration verified: all SQLite tables and row counts verified
+
+Do not delete DATABASE_URL or the Supabase database.
