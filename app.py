@@ -76,25 +76,126 @@ def postgres_table_exists(table):
   return bool(row and row[0])
 
 def bootstrap_postgres_from_sqlite():
- """One-time first-boot migration for free Render plans without Shell access."""
- if not IS_POSTGRES or os.environ.get('AUTO_MIGRATE_SQLITE','1')!='1':return
- sqlite_path=Path(DB)
- if not sqlite_path.exists() or sqlite_path.stat().st_size==0:return
- try:
-  if postgres_table_exists('rooms'):
-   with closing(conn()) as c:
-    existing=c.execute('SELECT COUNT(*) FROM rooms').fetchone()[0]
-   if existing:return
-  env=os.environ.copy()
-  env['SQLITE_PATH']=str(sqlite_path)
-  env['ALLOW_NONEMPTY_TARGET']='1'
-  result=subprocess.run([sys.executable,str(Path(ROOT)/'migrate_sqlite_to_postgres.py')],cwd=ROOT,env=env,text=True,capture_output=True,timeout=240)
-  if result.stdout:print(result.stdout,flush=True)
-  if result.stderr:print(result.stderr,file=sys.stderr,flush=True)
-  if result.returncode!=0:raise RuntimeError('تعذر نقل قاعدة SQLite إلى PostgreSQL في أول تشغيل')
- except Exception as exc:
-  print(f'[MAG CAMP] PostgreSQL first-boot migration failed: {exc}',file=sys.stderr,flush=True)
-  raise
+    """Best-effort one-time migration for free Render plans without Shell access.
+
+    The web service must not crash only because the migration helper returned a
+    non-zero status after copying data. We independently verify every source
+    table, record a durable PostgreSQL marker on success, and retry safely on a
+    later restart when verification is incomplete.
+    """
+    if not IS_POSTGRES or os.environ.get('AUTO_MIGRATE_SQLITE', '1') != '1':
+        return
+
+    sqlite_path = Path(DB)
+    if not sqlite_path.exists() or sqlite_path.stat().st_size == 0:
+        return
+
+    def migration_already_verified():
+        try:
+            with closing(conn()) as c:
+                c.execute("""CREATE TABLE IF NOT EXISTS magcamp_migrations(
+                    migration_key TEXT PRIMARY KEY,
+                    completed_at TEXT NOT NULL,
+                    details TEXT
+                )""")
+                row = c.execute(
+                    'SELECT migration_key FROM magcamp_migrations WHERE migration_key=?',
+                    ('sqlite_to_postgres_8_2',)
+                ).fetchone()
+                c.commit()
+                return bool(row)
+        except Exception:
+            return False
+
+    def verify_all_tables():
+        import sqlite3 as _sqlite3
+        src = _sqlite3.connect(str(sqlite_path))
+        try:
+            tables = [r[0] for r in src.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            ).fetchall()]
+            with closing(conn()) as c:
+                for table in tables:
+                    source_count = src.execute(
+                        f'SELECT COUNT(*) FROM "{table}"'
+                    ).fetchone()[0]
+                    exists = c.execute(
+                        'SELECT to_regclass(?)', (f'public.{table}',)
+                    ).fetchone()
+                    if not exists or not exists[0]:
+                        return False, f'missing table: {table}'
+                    target_count = c.execute(
+                        f'SELECT COUNT(*) FROM "{table}"'
+                    ).fetchone()[0]
+                    if target_count < source_count:
+                        return False, (
+                            f'row mismatch {table}: source={source_count}, '
+                            f'target={target_count}'
+                        )
+            return True, 'all SQLite tables and row counts verified'
+        finally:
+            src.close()
+
+    def write_marker(details):
+        with closing(conn()) as c:
+            c.execute("""CREATE TABLE IF NOT EXISTS magcamp_migrations(
+                migration_key TEXT PRIMARY KEY,
+                completed_at TEXT NOT NULL,
+                details TEXT
+            )""")
+            c.execute(
+                """INSERT INTO magcamp_migrations(migration_key, completed_at, details)
+                   VALUES(?, ?, ?)
+                   ON CONFLICT (migration_key) DO UPDATE SET
+                     completed_at=EXCLUDED.completed_at,
+                     details=EXCLUDED.details""",
+                ('sqlite_to_postgres_8_2', now(), details)
+            )
+            c.commit()
+
+    if migration_already_verified():
+        return
+
+    try:
+        env = os.environ.copy()
+        env['SQLITE_PATH'] = str(sqlite_path)
+        env['ALLOW_NONEMPTY_TARGET'] = '1'
+        result = subprocess.run(
+            [sys.executable, str(Path(ROOT) / 'migrate_sqlite_to_postgres.py')],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=300,
+        )
+        if result.stdout:
+            print(result.stdout, flush=True)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr, flush=True)
+
+        verified, details = verify_all_tables()
+        if verified:
+            write_marker(details)
+            print(f'[MAG CAMP] PostgreSQL migration verified: {details}', flush=True)
+            return
+
+        message = (
+            f'PostgreSQL migration incomplete (exit={result.returncode}): {details}'
+        )
+        print(f'[MAG CAMP] {message}', file=sys.stderr, flush=True)
+        if os.environ.get('AUTO_MIGRATE_STRICT', '0') == '1':
+            raise RuntimeError(message)
+        # Keep the web service online. The migration remains unmarked and will
+        # retry safely on the next restart/deploy using ON CONFLICT DO NOTHING.
+    except Exception as exc:
+        print(
+            f'[MAG CAMP] PostgreSQL first-boot migration warning: {exc}',
+            file=sys.stderr,
+            flush=True,
+        )
+        if os.environ.get('AUTO_MIGRATE_STRICT', '0') == '1':
+            raise
 
 def ensure_schema():
  with closing(conn()) as c:
