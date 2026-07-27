@@ -1,0 +1,23 @@
+MAG CAMP 8.3 — Stable Rebuild
+
+Base:
+- Functional workflow and bundled data are preserved from the stable 7.3 release.
+- PostgreSQL/Supabase support is retained from the 8.x compatibility layer only.
+
+Main safeguards:
+- No automatic mass password reset at application startup.
+- Existing users, roles, passwords, rooms, workers, maintenance and attendance data are preserved.
+- SQLite remains available locally when DATABASE_URL is absent.
+- PostgreSQL is used when DATABASE_URL points to Supabase/Render.
+- PostgreSQL-specific DISTINCT/ORDER BY and aggregate compatibility fixes are included.
+- SQLite backup/restore routes are disabled safely while running on PostgreSQL.
+
+Deployment:
+- Keep the existing DATABASE_URL and SECRET_KEY in Render.
+- Use Supabase Session Pooler URL.
+- Do not delete the Supabase database.
+- Deploy this ZIP over the existing GitHub project and run Manual Deploy.
+
+Emergency administrator:
+- employee number: admin
+- password comes from SUPER_ADMIN_PASSWORD (default Admin@73 only when the account is first created).

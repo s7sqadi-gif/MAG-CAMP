@@ -9,8 +9,8 @@ from werkzeug.exceptions import RequestEntityTooLarge
 from flask import Flask, abort, redirect, render_template_string, request, session, url_for, send_from_directory, send_file
 from database import connect as database_connect, column_names as database_column_names, IS_POSTGRES
 
-APP_VERSION='8.2.3'
-RELEASE_NAME='8.2.3-postgresql-compatibility-fix'
+APP_VERSION='8.3'
+RELEASE_NAME='8.3-stable-rebuild-from-7.3'
 ROOT=os.path.dirname(os.path.abspath(__file__)); DATA_DIR=os.path.join(ROOT,'data'); os.makedirs(DATA_DIR,exist_ok=True)
 DB=os.environ.get('DATABASE_PATH',os.path.join(DATA_DIR,'mhoms.db'))
 UPLOAD_DIR=os.environ.get('UPLOAD_PATH',os.path.join(ROOT,'uploads')); os.makedirs(UPLOAD_DIR,exist_ok=True)
@@ -295,145 +295,8 @@ def ensure_schema():
 bootstrap_postgres_from_sqlite()
 ensure_schema()
 
-def repair_user_accounts_822():
-    """Guaranteed one-time recovery for every account on PostgreSQL and SQLite.
-
-    Release 8.2.1 could roll back at the migration-marker INSERT because the
-    PostgreSQL compatibility layer incorrectly appended ``RETURNING id`` to a
-    table that has no id column. 8.2.2 fixes that adapter defect and uses a new
-    marker, then assigns deterministic temporary credentials so login can be
-    verified immediately.
-    """
-    source_path = Path(DB)
-    marker_key = 'user_accounts_reset_8_2_2'
-    if not source_path.exists() or source_path.stat().st_size == 0:
-        print('[MAG CAMP] 8.2.2 account reset skipped: bundled SQLite DB missing', flush=True)
-        return
-
-    src = None
-    try:
-        with closing(conn()) as c:
-            c.execute("""CREATE TABLE IF NOT EXISTS magcamp_migrations(
-                migration_key TEXT PRIMARY KEY,
-                completed_at TEXT NOT NULL,
-                details TEXT
-            )""")
-            done = c.execute(
-                'SELECT migration_key FROM magcamp_migrations WHERE migration_key=?',
-                (marker_key,)
-            ).fetchone()
-            c.commit()
-            if done:
-                print('[MAG CAMP] 8.2.2 account reset already completed', flush=True)
-                return
-
-        src = sqlite3.connect(str(source_path))
-        src.row_factory = sqlite3.Row
-        source_users = src.execute(
-            """SELECT employee_no,username,display_name,role,preferred_lang,active
-               FROM users ORDER BY id"""
-        ).fetchall()
-        if not source_users:
-            raise RuntimeError('bundled account roster is empty')
-
-        normal_password_hash = make_hash('123456')
-        admin_password_hash = make_hash('Admin@73')
-        repaired = created = 0
-
-        with closing(conn()) as c:
-            for row in source_users:
-                employee_no = str(row['employee_no'] or '').replace('\u00a0', ' ').strip()
-                if not employee_no:
-                    continue
-                username = str(row['username'] or employee_no).replace('\u00a0', ' ').strip() or employee_no
-                is_admin_account = employee_no.lower() == 'admin' or username.lower() == 'admin'
-                password_hash = admin_password_hash if is_admin_account else normal_password_hash
-                role = 'super_admin' if is_admin_account else row['role']
-                display_name = 'مدير النظام الشامل' if is_admin_account else row['display_name']
-
-                existing = c.execute(
-                    'SELECT id FROM users WHERE employee_no=? OR username=? ORDER BY id LIMIT 1',
-                    (employee_no, username)
-                ).fetchone()
-                values = (
-                    employee_no, username, display_name, password_hash, role,
-                    row['preferred_lang'] or 'ar', 1, 0
-                )
-                if existing:
-                    c.execute(
-                        """UPDATE users SET employee_no=?,username=?,display_name=?,
-                                  password_hash=?,role=?,preferred_lang=?,active=?,
-                                  must_change_password=? WHERE id=?""",
-                        values + (existing['id'],)
-                    )
-                    repaired += 1
-                else:
-                    c.execute(
-                        """INSERT INTO users(employee_no,username,display_name,password_hash,
-                                  role,preferred_lang,active,must_change_password)
-                           VALUES(?,?,?,?,?,?,?,?)""",
-                        values
-                    )
-                    created += 1
-
-            # Always guarantee the permanent emergency administrator, even if
-            # the bundled roster did not contain it.
-            admin = c.execute(
-                "SELECT id FROM users WHERE employee_no='admin' OR username='admin' ORDER BY id LIMIT 1"
-            ).fetchone()
-            if admin:
-                c.execute(
-                    """UPDATE users SET employee_no='admin',username='admin',
-                              display_name='مدير النظام الشامل',password_hash=?,
-                              role='super_admin',active=1,must_change_password=0
-                       WHERE id=?""",
-                    (admin_password_hash, admin['id'])
-                )
-            else:
-                c.execute(
-                    """INSERT INTO users(employee_no,username,display_name,password_hash,
-                              role,preferred_lang,active,must_change_password)
-                       VALUES(?,?,?,?,?,?,?,?)""",
-                    ('admin','admin','مدير النظام الشامل',admin_password_hash,
-                     'super_admin','ar',1,0)
-                )
-                created += 1
-
-            total = c.execute('SELECT COUNT(*) FROM users').fetchone()[0]
-            active = c.execute('SELECT COUNT(*) FROM users WHERE active=1').fetchone()[0]
-            admin_ok = c.execute(
-                "SELECT password_hash FROM users WHERE employee_no='admin' AND active=1 LIMIT 1"
-            ).fetchone()
-            hossam_ok = c.execute(
-                "SELECT password_hash FROM users WHERE employee_no='109753' AND active=1 LIMIT 1"
-            ).fetchone()
-            if not admin_ok or not verify(admin_ok['password_hash'], 'Admin@73'):
-                raise RuntimeError('admin credential verification failed before commit')
-            if not hossam_ok or not verify(hossam_ok['password_hash'], '123456'):
-                raise RuntimeError('Hossam credential verification failed before commit')
-
-            details = json.dumps({
-                'source_accounts': len(source_users), 'repaired': repaired,
-                'created': created, 'total': total, 'active': active,
-                'admin_verified': True, 'hossam_verified': True
-            }, ensure_ascii=False)
-            c.execute(
-                """INSERT INTO magcamp_migrations(migration_key,completed_at,details)
-                   VALUES(?,?,?)
-                   ON CONFLICT (migration_key) DO UPDATE SET
-                     completed_at=EXCLUDED.completed_at,details=EXCLUDED.details""",
-                (marker_key, now(), details)
-            )
-            c.commit()
-        print(f'[MAG CAMP] 8.2.2 guaranteed account reset completed: {details}', flush=True)
-    except Exception as exc:
-        print(f'[MAG CAMP] 8.2.2 account reset FAILED: {exc}', file=sys.stderr, flush=True)
-        raise
-    finally:
-        if src is not None:
-            src.close()
-
-repair_user_accounts_822()
+# Account passwords are preserved from the stable 7.3 database.
+# No automatic mass reset runs during application startup.
 
 def current_user():
  uid=session.get('uid')
