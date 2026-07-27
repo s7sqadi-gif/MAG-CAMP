@@ -19,3 +19,6 @@ services:
         value: /var/data/mhoms.db
       - key: UPLOAD_PATH
         value: /var/data/uploads
+
+      - key: DATABASE_URL
+        sync: false

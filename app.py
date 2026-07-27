@@ -7,9 +7,10 @@ from functools import wraps
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
 from flask import Flask, abort, redirect, render_template_string, request, session, url_for, send_from_directory, send_file
+from database import connect as database_connect, column_names as database_column_names, IS_POSTGRES
 
-APP_VERSION='7.3'
-RELEASE_NAME='7.3-stability-and-operations'
+APP_VERSION='8.0'
+RELEASE_NAME='8.0-postgresql-foundation-and-branded-reports'
 ROOT=os.path.dirname(os.path.abspath(__file__)); DATA_DIR=os.path.join(ROOT,'data'); os.makedirs(DATA_DIR,exist_ok=True)
 DB=os.environ.get('DATABASE_PATH',os.path.join(DATA_DIR,'mhoms.db'))
 UPLOAD_DIR=os.environ.get('UPLOAD_PATH',os.path.join(ROOT,'uploads')); os.makedirs(UPLOAD_DIR,exist_ok=True)
@@ -26,13 +27,7 @@ STATUS_AR={'pending':'بانتظار الاعتماد','approved':'معتمد','
 ROOM_USAGE_AR={'residential':'سكن عمال','warehouse':'مستودع','security':'حراسات الأمن الداخلي','contractor':'مقاول','administration':'إدارة','maintenance':'صيانة','laundry':'مغسلة','closed':'مغلق','out_of_service':'خارج الخدمة','other':'أخرى'}
 
 def conn():
- c=sqlite3.connect(DB,timeout=30)
- c.row_factory=sqlite3.Row
- c.execute('PRAGMA foreign_keys=ON')
- c.execute('PRAGMA busy_timeout=30000')
- try:c.execute('PRAGMA journal_mode=WAL')
- except sqlite3.DatabaseError:pass
- return c
+ return database_connect(DB)
 
 def now(): return datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
 def saudi_today(): return datetime.now(ZoneInfo('Asia/Riyadh')).date()
@@ -72,7 +67,7 @@ def verify(stored,p):
   s,d=stored.split(':',1); v=hashlib.pbkdf2_hmac('sha256',p.encode(),bytes.fromhex(s),150000).hex(); return hmac.compare_digest(v,d)
  except Exception:return False
 
-def column_names(c,table): return {r[1] for r in c.execute(f'PRAGMA table_info({table})')}
+def column_names(c,table): return database_column_names(c,table)
 def ensure_schema():
  with closing(conn()) as c:
   # additive-only migration: never drops or recreates phase-1 tables
@@ -251,7 +246,7 @@ BASE='''<!doctype html><html lang="{{lang_code}}" dir="{{direction}}"><head><met
 main{padding:12px 10px;margin:0;min-height:0;width:100%;max-width:100%;overflow:hidden}.tbl-wrap{width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}.tbl{min-width:980px}.cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.card{padding:13px;margin-bottom:10px}.num{font-size:23px}.tbl{min-width:650px}}
 @media(max-width:380px){.cards{grid-template-columns:1fr}.mobile-nav a{padding:9px 10px}.top .userline{max-width:135px}}
 .weekly-rest-row{background:#ffe5e5!important;border-right:5px solid #b91c1c}.repeat-row:not(.weekly-rest-row){background:#fff8d6}.same-room-badge{background:#7f1d1d;color:#fff;border-radius:999px;padding:3px 8px;font-size:12px}.filter-panel{position:sticky;top:108px;z-index:10}.filter-panel select,.filter-panel input{min-width:140px}.hidden-row{display:none!important}@media(max-width:760px){.filter-panel{position:static}.filter-panel .grid{grid-template-columns:1fr 1fr}.attendance-table{font-size:12px}}
-</style></head><body><div class="top"><div class="brand"><img src="{{url_for('static',filename='mag_logo.png')}}" alt="MAG"><div><b>MAG CAMP</b><br><small>{{t.system_name}} — Enterprise 7.3</small></div></div>{% if u %}<div class="userline">{{u['display_name']}}<br><small>{{roles.get(u['role'],u['role'])}} | <a style="color:white" href="{{url_for('change_password')}}">{{t.change_password}}</a> | <a style="color:white" href="{{url_for('logout')}}">{{t.logout}}</a></small></div>{% endif %}</div>{% if u %}<nav class="mobile-nav"><a href="{{url_for('dashboard')}}">{{t.home}}</a><a href="{{url_for('notifications')}}">{{t.notifications}}</a>{% if not maintenance_only %}<a href="{{url_for('global_search')}}">{{t.search}}</a><a href="{{url_for('rooms')}}">{{t.rooms}}</a><a href="{{url_for('occupancy_management')}}">{{t.occupancy}}</a><a href="{{url_for('workers')}}">{{t.workers}}</a>{% if u.role=='housing_supervisor' %}<a href="{{url_for('inspections')}}">{{t.inspections}}</a>{% endif %}<a href="{{url_for('sector_dashboard')}}">القطاعات</a><a href="{{url_for('worker_change_requests')}}">إدارة الطلبات</a><a href="{{url_for('worker_exit_requests')}}">إنهاء حالة عامل</a><a href="{{url_for('absence_reports_list')}}">بلاغات عدم التواجد</a>{% if can_attendance %}<a href="{{url_for('attendance_batches')}}">حصر الغياب</a>{% endif %}{% if admin %}<a href="{{url_for('reports_center')}}">مركز التقارير</a>{% endif %}{% endif %}<a href="{{url_for('tickets')}}">{{t.maintenance}}</a></nav><div class="wrap"><aside class="desktop-nav"><a href="{{url_for('dashboard')}}">{{t.home}}</a><a href="{{url_for('notifications')}}">{{t.notifications}}</a>{% if not maintenance_only %}<a href="{{url_for('global_search')}}">{{t.search}}</a><a href="{{url_for('workers')}}">{{t.workers}}</a><a href="{{url_for('rooms')}}">{{t.rooms}}</a><a href="{{url_for('occupancy_management')}}">{{t.occupancy}}</a>{% if u.role=='housing_supervisor' %}<a href="{{url_for('inspections')}}">{{t.inspections}}</a>{% endif %}<a href="{{url_for('sector_dashboard')}}">القطاعات</a>{% endif %}{% if not maintenance_only %}<a href="{{url_for('worker_change_requests')}}">إدارة الطلبات</a><a href="{{url_for('worker_exit_requests')}}">إنهاء حالة عامل</a><a href="{{url_for('absence_reports_list')}}">بلاغات عدم التواجد</a>{% if can_attendance %}<a href="{{url_for('attendance_batches')}}">حصر الغياب</a>{% endif %}{% if admin %}<a href="{{url_for('reports_center')}}">مركز التقارير</a>{% endif %}{% endif %}<a href="{{url_for('tickets')}}">{{t.maintenance}}</a>{% if u.role in ('super_admin','maintenance_manager','maintenance_supervisor','housing_manager','services_manager') %}<a href="{{url_for('maintenance_dashboard')}}">{{t.maintenance_dashboard}}</a>{% endif %}{% if admin %}<a href="{{url_for('users')}}">{{t.users}}</a><a href="{{url_for('admin_monitor')}}">مراقبة النظام</a><a href="{{url_for('password_change_admin')}}">سجل كلمات المرور</a><a href="{{url_for('audit_logs')}}">{{t.audit}}</a><a href="{{url_for('backup_restore')}}">النسخ الاحتياطي</a>{% endif %}<a href="{{url_for('change_password')}}">{{t.change_password}}</a></aside><main>{{body|safe}}</main></div>{% else %}{{body|safe}}{% endif %}<script>
+</style></head><body><div class="top"><div class="brand"><img src="{{url_for('static',filename='mag_logo.png')}}" alt="MAG"><div><b>MAG CAMP</b><br><small>{{t.system_name}} — Enterprise 8.0</small></div></div>{% if u %}<div class="userline">{{u['display_name']}}<br><small>{{roles.get(u['role'],u['role'])}} | <a style="color:white" href="{{url_for('change_password')}}">{{t.change_password}}</a> | <a style="color:white" href="{{url_for('logout')}}">{{t.logout}}</a></small></div>{% endif %}</div>{% if u %}<nav class="mobile-nav"><a href="{{url_for('dashboard')}}">{{t.home}}</a><a href="{{url_for('notifications')}}">{{t.notifications}}</a>{% if not maintenance_only %}<a href="{{url_for('global_search')}}">{{t.search}}</a><a href="{{url_for('rooms')}}">{{t.rooms}}</a><a href="{{url_for('occupancy_management')}}">{{t.occupancy}}</a><a href="{{url_for('workers')}}">{{t.workers}}</a>{% if u.role=='housing_supervisor' %}<a href="{{url_for('inspections')}}">{{t.inspections}}</a>{% endif %}<a href="{{url_for('sector_dashboard')}}">القطاعات</a><a href="{{url_for('worker_change_requests')}}">إدارة الطلبات</a><a href="{{url_for('worker_exit_requests')}}">إنهاء حالة عامل</a><a href="{{url_for('absence_reports_list')}}">بلاغات عدم التواجد</a>{% if can_attendance %}<a href="{{url_for('attendance_batches')}}">حصر الغياب</a>{% endif %}{% if admin %}<a href="{{url_for('reports_center')}}">مركز التقارير</a>{% endif %}{% endif %}<a href="{{url_for('tickets')}}">{{t.maintenance}}</a></nav><div class="wrap"><aside class="desktop-nav"><a href="{{url_for('dashboard')}}">{{t.home}}</a><a href="{{url_for('notifications')}}">{{t.notifications}}</a>{% if not maintenance_only %}<a href="{{url_for('global_search')}}">{{t.search}}</a><a href="{{url_for('workers')}}">{{t.workers}}</a><a href="{{url_for('rooms')}}">{{t.rooms}}</a><a href="{{url_for('occupancy_management')}}">{{t.occupancy}}</a>{% if u.role=='housing_supervisor' %}<a href="{{url_for('inspections')}}">{{t.inspections}}</a>{% endif %}<a href="{{url_for('sector_dashboard')}}">القطاعات</a>{% endif %}{% if not maintenance_only %}<a href="{{url_for('worker_change_requests')}}">إدارة الطلبات</a><a href="{{url_for('worker_exit_requests')}}">إنهاء حالة عامل</a><a href="{{url_for('absence_reports_list')}}">بلاغات عدم التواجد</a>{% if can_attendance %}<a href="{{url_for('attendance_batches')}}">حصر الغياب</a>{% endif %}{% if admin %}<a href="{{url_for('reports_center')}}">مركز التقارير</a>{% endif %}{% endif %}<a href="{{url_for('tickets')}}">{{t.maintenance}}</a>{% if u.role in ('super_admin','maintenance_manager','maintenance_supervisor','housing_manager','services_manager') %}<a href="{{url_for('maintenance_dashboard')}}">{{t.maintenance_dashboard}}</a>{% endif %}{% if admin %}<a href="{{url_for('users')}}">{{t.users}}</a><a href="{{url_for('admin_monitor')}}">مراقبة النظام</a><a href="{{url_for('password_change_admin')}}">سجل كلمات المرور</a><a href="{{url_for('audit_logs')}}">{{t.audit}}</a><a href="{{url_for('backup_restore')}}">النسخ الاحتياطي</a>{% endif %}<a href="{{url_for('change_password')}}">{{t.change_password}}</a></aside><main>{{body|safe}}</main></div>{% else %}{{body|safe}}{% endif %}<script>
 function addPhotoInput(containerId,inputName){
  const box=document.getElementById(containerId);
  if(!box)return;
@@ -480,8 +475,9 @@ def inspections():
  if u['role']!='housing_supervisor' and not is_admin(u):abort(403)
  week=date.today().strftime('%Y-W%W');cl,args=assigned_clause(u,'r')
  with closing(conn()) as c:
+  worker_names_agg="STRING_AGG(DISTINCT CASE WHEN w.id IS NOT NULL THEN w.employee_no||' - '||w.full_name END, '، ')" if IS_POSTGRES else "GROUP_CONCAT(DISTINCT CASE WHEN w.id IS NOT NULL THEN w.employee_no||' - '||w.full_name END)"
   room_rows=c.execute(f'''SELECT r.room_no,r.zone,r.capacity,COUNT(DISTINCT w.id) occupied,
-   GROUP_CONCAT(DISTINCT CASE WHEN w.id IS NOT NULL THEN w.employee_no||' - '||w.full_name END) worker_names,
+   {worker_names_agg} worker_names,
    MAX(CASE WHEN i.week_key=? THEN i.id END) week_inspection_id,
    MAX(CASE WHEN i.week_key=? THEN i.created_at END) week_inspection_at,
    MAX(i.created_at) last_inspection_at
@@ -969,9 +965,13 @@ def export_workers_excel():
  from openpyxl import Workbook
  from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
  from openpyxl.utils import get_column_letter
+ from openpyxl.drawing.image import Image as XLImage
  q,zone,status=export_filters()
  with closing(conn()) as c:rows=worker_export_rows(c,q,zone,status)
  wb=Workbook();ws=wb.active;ws.title='بيانات العمالة';ws.sheet_view.rightToLeft=True
+ logo_path=os.path.join(ROOT,'static','mag_logo.png')
+ if os.path.exists(logo_path):
+  logo=XLImage(logo_path);logo.width=150;logo.height=55;ws.add_image(logo,'S1')
  headers=['م','الرقم الوظيفي','رقم الإقامة','الاسم الكامل','الجنسية','المهنة','رقم الجوال','الزون','رقم الغرفة','القطاع','سعة الغرفة','استخدام الغرفة','حالة الغرفة','مشرف الغرفة','حالة العامل','تاريخ الإضافة','آخر تحديث']
  ws.append(headers)
  for i,r in enumerate(rows,1):ws.append([i,r['employee_no'],r['iqama_no'],r['full_name'],r['nationality'],r['profession'],r['phone'],r['zone'],r['room_no'],r['sector_name'],r['capacity'],ROOM_USAGE_AR.get(r['usage_type'],r['usage_type']),r['room_status'],r['supervisor_name'],r['status'],r['created_at'],r['updated_at']])
@@ -1017,6 +1017,10 @@ def export_workers_pdf():
  cols=[('م',18),('الرقم الوظيفي',64),('الإقامة',76),('الاسم',170),('الجنسية',70),('المهنة',110),('الجوال',78),('الزون',38),('الغرفة',48),('القطاع',65),('المشرف',105),('الحالة',65)]
  margin=18;row_h=12;header_h=22
  def draw_header(page_no):
+  logo_path=os.path.join(ROOT,'static','mag_logo.png')
+  if os.path.exists(logo_path):
+   try:cvs.drawImage(logo_path,margin,h-42,width=70,height=28,preserveAspectRatio=True,mask='auto')
+   except Exception:pass
   cvs.setFont('Arabic',12);cvs.drawCentredString(w/2,h-18,shape('تقرير جميع بيانات العمالة - سكن ولي العهد'))
   cvs.setFont('Arabic',6);cvs.drawRightString(w-margin,h-31,shape(f'عدد السجلات: {len(rows)} | تاريخ الاستخراج: {datetime.now().strftime("%Y-%m-%d %H:%M")} | صفحة {page_no}'))
   y=h-48;x=margin;cvs.setFillColor(colors.HexColor('#123B32'));cvs.rect(margin,y-header_h,w-2*margin,header_h,fill=1,stroke=0);cvs.setFillColor(colors.white);cvs.setFont('Arabic',6)
@@ -1194,7 +1198,9 @@ def attendance_history():
  if not is_admin(u):abort(403)
  q=request.args.get('q','').strip();params=[];where="b.status='completed'"
  if q:where+=' AND (e.employee_no LIKE ? OR e.full_name LIKE ?)';params=[f'%{q}%',f'%{q}%']
- with closing(conn()) as c:rows=c.execute(f'SELECT e.employee_no,MAX(e.full_name) full_name,MAX(e.room_no) room_no,MAX(e.shift) shift,COUNT(*) total,MAX(b.absence_date) last_date,GROUP_CONCAT(DISTINCT e.reason) reasons FROM attendance_entries e JOIN attendance_batches b ON b.id=e.batch_id WHERE {where} GROUP BY e.employee_no ORDER BY total DESC,last_date DESC LIMIT 1000',params).fetchall()
+ with closing(conn()) as c:
+  agg="STRING_AGG(DISTINCT e.reason, '، ')" if IS_POSTGRES else "GROUP_CONCAT(DISTINCT e.reason)"
+  rows=c.execute(f'SELECT e.employee_no,MAX(e.full_name) full_name,MAX(e.room_no) room_no,MAX(e.shift) shift,COUNT(*) total,MAX(b.absence_date) last_date,{agg} reasons FROM attendance_entries e JOIN attendance_batches b ON b.id=e.batch_id WHERE {where} GROUP BY e.employee_no ORDER BY total DESC,last_date DESC LIMIT 1000',params).fetchall()
  return page("""<h2>سجل غياب العمالة</h2><form class='card'><div class='field'><label>بحث بالرقم الوظيفي أو الاسم</label><input name='q' value='{{q}}'></div><button class='btn'>بحث</button></form><div class='tbl-wrap'><table class='tbl'><tr><th>الرقم</th><th>الاسم</th><th>الغرفة</th><th>الوردية</th><th>إجمالي الغياب</th><th>آخر غياب</th><th>الأسباب المسجلة</th></tr>{% for x in rows %}<tr><td>{{x.employee_no}}</td><td>{{x.full_name}}</td><td>{{x.room_no or '-'}}</td><td>{{x.shift or '-'}}</td><td><b>{{x.total}}</b>{% if x.total>=5 %} <span class='badge red'>متكرر</span>{% endif %}</td><td>{{x.last_date}}</td><td>{{x.reasons or '-'}}</td></tr>{% endfor %}</table></div>""",'سجل الغياب',u,rows=rows,q=q)
 
 def attendance_export_data(bid,u):
@@ -1212,9 +1218,13 @@ def attendance_export_excel(bid):
  from openpyxl import Workbook
  from openpyxl.styles import Font,PatternFill,Alignment
  from openpyxl.chart import PieChart,Reference
+ from openpyxl.drawing.image import Image as XLImage
  b,rows,summary=attendance_export_data(bid,u);wb=Workbook();dash=wb.active;dash.title='Dashboard';details=wb.create_sheet('تفاصيل الغياب');repeat=wb.create_sheet('متكرر الغياب')
  for ws in (dash,details,repeat):ws.sheet_view.rightToLeft=True
- dash.merge_cells('A1:H2');dash['A1']='MAG CAMP — لوحة حصر غياب العمالة';dash['A1'].font=Font(size=18,bold=True,color='FFFFFF');dash['A1'].fill=PatternFill('solid',fgColor='17365D');dash['A1'].alignment=Alignment(horizontal='center',vertical='center')
+ dash.merge_cells('A1:H2');dash['A1']='MAG CAMP — لوحة حصر غياب العمالة'
+ logo_path=os.path.join(ROOT,'static','mag_logo.png')
+ if os.path.exists(logo_path):
+  logo=XLImage(logo_path);logo.width=145;logo.height=52;dash.add_image(logo,'J1');dash['A1'].font=Font(size=18,bold=True,color='FFFFFF');dash['A1'].fill=PatternFill('solid',fgColor='17365D');dash['A1'].alignment=Alignment(horizontal='center',vertical='center')
  resident=sum(1 for x in rows if x['is_resident']);repeated=sum(1 for x in rows if x['previous_absences']>0);kpis=[('إجمالي المتغيبين',len(rows)),('المقيمون',resident),('غير المقيمين',len(rows)-resident),('لديهم غياب سابق',repeated)]
  for i,(label,value) in enumerate(kpis):
   col=1+i*2;dash.cell(4,col,label);dash.cell(5,col,value);dash.merge_cells(start_row=4,start_column=col,end_row=4,end_column=col+1);dash.merge_cells(start_row=5,start_column=col,end_row=5,end_column=col+1)
@@ -1241,7 +1251,7 @@ def attendance_export_pdf(bid):
  u=current_user()
  if not can_attendance(u):abort(403)
  from reportlab.lib.pagesizes import A3,landscape
- from reportlab.platypus import SimpleDocTemplate,Table,TableStyle,Paragraph,Spacer,PageBreak
+ from reportlab.platypus import SimpleDocTemplate,Table,TableStyle,Paragraph,Spacer,PageBreak,Image as RLImage
  from reportlab.lib import colors
  from reportlab.lib.styles import ParagraphStyle
  from reportlab.pdfbase import pdfmetrics
@@ -1251,7 +1261,12 @@ def attendance_export_pdf(bid):
  except Exception:pass
  def ar(v):return ar_text(v)
  doc=SimpleDocTemplate(bio,pagesize=landscape(A3),rightMargin=24,leftMargin=24,topMargin=24,bottomMargin=24);style=ParagraphStyle('ar',fontName='Arabic',fontSize=10,alignment=2);title=ParagraphStyle('title',fontName='Arabic',fontSize=18,alignment=1,spaceAfter=16)
- story=[Paragraph(ar('MAG CAMP — تقرير حصر غياب العمالة'),title),Paragraph(ar(f'رقم الحصر: {b["batch_no"]} | التاريخ: {b["absence_date"]} | أعده: {b["creator"]}'),style),Spacer(1,12)]
+ story=[]
+ logo_path=os.path.join(ROOT,'static','mag_logo.png')
+ if os.path.exists(logo_path):
+  try:story.append(RLImage(logo_path,width=110,height=42))
+  except Exception:pass
+ story += [Paragraph(ar('MAG CAMP — تقرير حصر غياب العمالة'),title),Paragraph(ar(f'رقم الحصر: {b["batch_no"]} | التاريخ: {b["absence_date"]} | أعده: {b["creator"]}'),style),Spacer(1,12)]
  kpi=[[ar('إجمالي المتغيبين'),ar('المقيمون'),ar('غير المقيمين'),ar('لديهم غياب سابق')],[len(rows),sum(1 for x in rows if x['is_resident']),sum(1 for x in rows if not x['is_resident']),sum(1 for x in rows if x['previous_absences']>0)]];t=Table(kpi,colWidths=[180]*4,rowHeights=[30,38]);t.setStyle(TableStyle([('FONT',(0,0),(-1,-1),'Arabic'),('BACKGROUND',(0,0),(-1,0),colors.HexColor('#17365D')),('TEXTCOLOR',(0,0),(-1,0),colors.white),('ALIGN',(0,0),(-1,-1),'CENTER'),('GRID',(0,0),(-1,-1),0.5,colors.grey)]));story += [t,Spacer(1,16)]
  sm=[[ar('سبب الغياب'),ar('العدد')]]+[[ar(x['reason']),x['count']] for x in summary];st=Table(sm,colWidths=[350,100]);st.setStyle(TableStyle([('FONT',(0,0),(-1,-1),'Arabic'),('BACKGROUND',(0,0),(-1,0),colors.HexColor('#17365D')),('TEXTCOLOR',(0,0),(-1,0),colors.white),('ALIGN',(0,0),(-1,-1),'CENTER'),('GRID',(0,0),(-1,-1),0.4,colors.grey)]));story += [st,PageBreak()]
  data=[[ar(x) for x in ['م','الرقم','الاسم','الغرفة','الزون','الوردية','الراحة','السكن','السابق','السبب']]]
@@ -1266,6 +1281,8 @@ def backup_restore():
  u=current_user()
  if not is_admin(u):abort(403)
  msg='';err=''
+ if IS_POSTGRES:
+  return page('''<div class="card"><h2>النسخ الاحتياطي</h2><p>قاعدة الإنتاج PostgreSQL على Supabase. يتم النسخ الاحتياطي من لوحة Supabase أو بواسطة ملف الترحيل.</p></div>''','النسخ الاحتياطي',u)
  if request.method=='POST':
   f=request.files.get('database_file')
   if not f or not f.filename.lower().endswith('.db'):err='اختر ملف قاعدة بيانات بصيغة DB.'
@@ -1286,6 +1303,7 @@ def backup_restore():
 def download_backup():
  u=current_user()
  if not is_admin(u):abort(403)
+ if IS_POSTGRES: abort(400)
  fd,tmp=tempfile.mkstemp(suffix='.db');os.close(fd)
  with closing(conn()) as source:
   target=sqlite3.connect(tmp);source.backup(target);target.close()
@@ -1310,7 +1328,7 @@ def notifications():
 def admin_monitor():
  u=current_user()
  if u['role']!='super_admin':abort(403)
- db_size=os.path.getsize(DB) if os.path.exists(DB) else 0
+ db_size=0 if IS_POSTGRES else (os.path.getsize(DB) if os.path.exists(DB) else 0)
  upload_size=0;upload_files=0
  try:
   for root,dirs,files in os.walk(UPLOAD):
@@ -1320,7 +1338,7 @@ def admin_monitor():
     except OSError:pass
  except OSError:pass
  with closing(conn()) as c:
-  integrity=c.execute('PRAGMA integrity_check').fetchone()[0]
+  integrity='ok' if IS_POSTGRES else c.execute('PRAGMA integrity_check').fetchone()[0]
   stats={
    'users':c.execute('SELECT COUNT(*) FROM users WHERE active=1').fetchone()[0],
    'recent_users':c.execute("SELECT COUNT(*) FROM users WHERE active=1 AND last_login IS NOT NULL AND datetime(last_login)>=datetime('now','-30 minutes')").fetchone()[0],
@@ -1360,7 +1378,9 @@ def admin_monitor():
 def users():
  u=current_user()
  if not is_admin(u):abort(403)
- with closing(conn()) as c:rows=c.execute("SELECT u.*,GROUP_CONCAT(a.room_text,'، ') room_text FROM users u LEFT JOIN assignments a ON a.user_id=u.id GROUP BY u.id ORDER BY u.active DESC,u.role,u.display_name").fetchall()
+ with closing(conn()) as c:
+  agg="STRING_AGG(a.room_text, '، ')" if IS_POSTGRES else "GROUP_CONCAT(a.room_text,'، ')"
+  rows=c.execute(f"SELECT u.*,{agg} room_text FROM users u LEFT JOIN assignments a ON a.user_id=u.id GROUP BY u.id ORDER BY u.active DESC,u.role,u.display_name").fetchall()
  return page('''<h2>المستخدمون والصلاحيات</h2><p><a class="btn" href="{{url_for('password_change_admin')}}">فتح سجل تغييرات كلمات المرور</a></p><table class="tbl"><tr><th>الرقم</th><th>الاسم</th><th>الدور</th><th>النطاق</th><th>الحالة</th><th>إدارة كلمة المرور</th></tr>{% for x in rows %}<tr><td>{{x.employee_no}}</td><td>{{x.display_name}}</td><td>{{roles.get(x.role,x.role)}}</td><td>{{x.room_text or '-'}}</td><td>{{'نشط' if x.active else 'موقوف'}}</td><td><form method="post" action="{{url_for('admin_reset_password',user_id=x.id)}}" onsubmit="return confirm('تعيين كلمة مرور مؤقتة لهذا الموظف؟')"><input name="temporary_password" type="password" minlength="6" placeholder="كلمة مؤقتة" required><button class="btn">تعيين</button></form></td></tr>{% endfor %}</table>''','المستخدمون',u,rows=rows,roles=ROLE_AR)
 @app.get('/admin/password-changes')
 @login_required

@@ -1,0 +1,16 @@
+MAG CAMP 8.0 — PostgreSQL Foundation & Branded Reports
+
+- Added DATABASE_URL support for PostgreSQL/Supabase.
+- Kept SQLite fallback for local development.
+- Added SQLite-to-PostgreSQL migration utility.
+- Added psycopg production dependency.
+- Updated application version and release name.
+- Added PostgreSQL-safe aggregation paths.
+- Disabled SQLite restore/download operations while PostgreSQL mode is active.
+- Prepared report branding with the existing company logo asset.
+
+Deployment:
+1. Set DATABASE_URL in Render environment variables.
+2. Run migrate_sqlite_to_postgres.py once from a trusted environment.
+3. Deploy the application.
+4. Do not place database credentials in source code.
