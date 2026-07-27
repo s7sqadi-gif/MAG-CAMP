@@ -1,0 +1,8 @@
+MAG CAMP 8.2 - PostgreSQL First-Boot Hotfix
+
+- Fixed relation "rooms" does not exist on a new Supabase database.
+- Added core-table creation before additive schema updates.
+- Added automatic one-time SQLite-to-PostgreSQL migration for Render Free (no Shell required).
+- Migration runs only when PostgreSQL rooms table is missing/empty and bundled SQLite contains data.
+- Fixed PostgreSQL INSERT handling for tables without an id column.
+- Keep DATABASE_URL on Supabase Session Pooler.

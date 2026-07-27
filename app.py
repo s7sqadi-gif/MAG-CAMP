@@ -1,4 +1,4 @@
-import hashlib, hmac, io, json, os, shutil, sqlite3, tempfile, uuid
+import hashlib, hmac, io, json, os, shutil, sqlite3, tempfile, uuid, subprocess, sys
 from pathlib import Path
 from contextlib import closing
 from datetime import date, datetime
@@ -9,8 +9,8 @@ from werkzeug.exceptions import RequestEntityTooLarge
 from flask import Flask, abort, redirect, render_template_string, request, session, url_for, send_from_directory, send_file
 from database import connect as database_connect, column_names as database_column_names, IS_POSTGRES
 
-APP_VERSION='8.1'
-RELEASE_NAME='8.1-data-migration-and-postgresql-compatibility'
+APP_VERSION='8.2'
+RELEASE_NAME='8.2-postgres-first-boot-schema-hotfix'
 ROOT=os.path.dirname(os.path.abspath(__file__)); DATA_DIR=os.path.join(ROOT,'data'); os.makedirs(DATA_DIR,exist_ok=True)
 DB=os.environ.get('DATABASE_PATH',os.path.join(DATA_DIR,'mhoms.db'))
 UPLOAD_DIR=os.environ.get('UPLOAD_PATH',os.path.join(ROOT,'uploads')); os.makedirs(UPLOAD_DIR,exist_ok=True)
@@ -68,8 +68,43 @@ def verify(stored,p):
  except Exception:return False
 
 def column_names(c,table): return database_column_names(c,table)
+
+def postgres_table_exists(table):
+ if not IS_POSTGRES:return False
+ with closing(conn()) as c:
+  row=c.execute("SELECT to_regclass(?)",(f"public.{table}",)).fetchone()
+  return bool(row and row[0])
+
+def bootstrap_postgres_from_sqlite():
+ """One-time first-boot migration for free Render plans without Shell access."""
+ if not IS_POSTGRES or os.environ.get('AUTO_MIGRATE_SQLITE','1')!='1':return
+ sqlite_path=Path(DB)
+ if not sqlite_path.exists() or sqlite_path.stat().st_size==0:return
+ try:
+  if postgres_table_exists('rooms'):
+   with closing(conn()) as c:
+    existing=c.execute('SELECT COUNT(*) FROM rooms').fetchone()[0]
+   if existing:return
+  env=os.environ.copy()
+  env['SQLITE_PATH']=str(sqlite_path)
+  env['ALLOW_NONEMPTY_TARGET']='1'
+  result=subprocess.run([sys.executable,str(Path(ROOT)/'migrate_sqlite_to_postgres.py')],cwd=ROOT,env=env,text=True,capture_output=True,timeout=240)
+  if result.stdout:print(result.stdout,flush=True)
+  if result.stderr:print(result.stderr,file=sys.stderr,flush=True)
+  if result.returncode!=0:raise RuntimeError('تعذر نقل قاعدة SQLite إلى PostgreSQL في أول تشغيل')
+ except Exception as exc:
+  print(f'[MAG CAMP] PostgreSQL first-boot migration failed: {exc}',file=sys.stderr,flush=True)
+  raise
+
 def ensure_schema():
  with closing(conn()) as c:
+  # Core tables must exist on a brand-new PostgreSQL database before additive migrations.
+  c.executescript('''
+  CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,employee_no TEXT,username TEXT UNIQUE,display_name TEXT,password_hash TEXT,role TEXT,preferred_lang TEXT DEFAULT 'ar',active INTEGER DEFAULT 1,must_change_password INTEGER NOT NULL DEFAULT 1,last_login TEXT);
+  CREATE TABLE IF NOT EXISTS rooms(id INTEGER PRIMARY KEY AUTOINCREMENT,zone INTEGER,room_no TEXT UNIQUE,capacity INTEGER,room_type TEXT DEFAULT 'worker_room');
+  CREATE TABLE IF NOT EXISTS workers(id INTEGER PRIMARY KEY AUTOINCREMENT,employee_no TEXT,iqama_no TEXT,full_name TEXT,nationality TEXT,profession TEXT,zone INTEGER,room_no TEXT,status TEXT DEFAULT 'active',archived INTEGER DEFAULT 0,created_at TEXT,updated_at TEXT);
+  CREATE TABLE IF NOT EXISTS assignments(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,room_start INTEGER,room_end INTEGER,room_text TEXT,bathrooms_group TEXT);
+  ''')
   # additive-only migration: never drops or recreates phase-1 tables
   c.executescript('''
   CREATE TABLE IF NOT EXISTS requests(id INTEGER PRIMARY KEY AUTOINCREMENT,request_no TEXT UNIQUE,request_type TEXT,worker_id INTEGER,payload_json TEXT,requested_by INTEGER,approver_id INTEGER,status TEXT DEFAULT 'pending',decision_reason TEXT,created_at TEXT,decided_at TEXT);
@@ -156,6 +191,7 @@ def ensure_schema():
    if not collision:
     c.execute("INSERT INTO users(employee_no,username,display_name,password_hash,role,preferred_lang,active,must_change_password) VALUES(?,?,?,?,?,?,?,?)",('admin','admin','مدير النظام الشامل',make_hash(admin_password),'super_admin','ar',1,1))
   c.commit()
+bootstrap_postgres_from_sqlite()
 ensure_schema()
 
 def current_user():

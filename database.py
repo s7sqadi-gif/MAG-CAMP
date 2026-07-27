@@ -112,7 +112,9 @@ class PostgresConnection:
             translated += " ON CONFLICT DO NOTHING"
 
         insert_match = _INSERT_RE.match(original)
-        needs_id = bool(insert_match) and "RETURNING" not in translated.upper()
+        table_name = insert_match.group(1).strip('"') if insert_match else ""
+        no_id_tables = {"project_workers"}
+        needs_id = bool(insert_match) and table_name not in no_id_tables and "RETURNING" not in translated.upper()
         if needs_id:
             translated += " RETURNING id"
 
