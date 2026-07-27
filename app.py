@@ -9,8 +9,8 @@ from werkzeug.exceptions import RequestEntityTooLarge
 from flask import Flask, abort, redirect, render_template_string, request, session, url_for, send_from_directory, send_file
 from database import connect as database_connect, column_names as database_column_names, IS_POSTGRES
 
-APP_VERSION='8.2'
-RELEASE_NAME='8.2-postgres-first-boot-schema-hotfix'
+APP_VERSION='8.2.1'
+RELEASE_NAME='8.2.1-user-login-recovery'
 ROOT=os.path.dirname(os.path.abspath(__file__)); DATA_DIR=os.path.join(ROOT,'data'); os.makedirs(DATA_DIR,exist_ok=True)
 DB=os.environ.get('DATABASE_PATH',os.path.join(DATA_DIR,'mhoms.db'))
 UPLOAD_DIR=os.environ.get('UPLOAD_PATH',os.path.join(ROOT,'uploads')); os.makedirs(UPLOAD_DIR,exist_ok=True)
@@ -295,6 +295,114 @@ def ensure_schema():
 bootstrap_postgres_from_sqlite()
 ensure_schema()
 
+def repair_user_accounts_821():
+    """One-time recovery of all built-in accounts after SQLite→PostgreSQL migration.
+
+    The bundled SQLite database is the canonical account roster for this release.
+    We upsert every account by employee number, restore its verified password hash,
+    role and activation state, and create a durable marker so later password changes
+    are never overwritten on ordinary restarts.
+    """
+    source_path = Path(DB)
+    marker_key = 'user_accounts_repaired_8_2_1'
+    if not source_path.exists() or source_path.stat().st_size == 0:
+        return
+    try:
+        with closing(conn()) as c:
+            c.execute("""CREATE TABLE IF NOT EXISTS magcamp_migrations(
+                migration_key TEXT PRIMARY KEY,
+                completed_at TEXT NOT NULL,
+                details TEXT
+            )""")
+            done = c.execute(
+                'SELECT migration_key FROM magcamp_migrations WHERE migration_key=?',
+                (marker_key,)
+            ).fetchone()
+            c.commit()
+            if done:
+                return
+
+        src = sqlite3.connect(str(source_path))
+        src.row_factory = sqlite3.Row
+        source_users = src.execute(
+            """SELECT employee_no,username,display_name,password_hash,role,
+                      preferred_lang,active,must_change_password
+               FROM users ORDER BY id"""
+        ).fetchall()
+        src.close()
+        if not source_users:
+            raise RuntimeError('bundled account roster is empty')
+
+        repaired = 0
+        created = 0
+        with closing(conn()) as c:
+            for row in source_users:
+                employee_no = str(row['employee_no'] or '').strip()
+                username = str(row['username'] or employee_no).strip() or employee_no
+                existing = c.execute(
+                    'SELECT id FROM users WHERE employee_no=? OR username=? ORDER BY id LIMIT 1',
+                    (employee_no, username)
+                ).fetchone()
+                values = (
+                    employee_no, username, row['display_name'], row['password_hash'],
+                    row['role'], row['preferred_lang'] or 'ar',
+                    1 if row['active'] is None else row['active'],
+                    1 if row['must_change_password'] is None else row['must_change_password'],
+                )
+                if existing:
+                    c.execute(
+                        """UPDATE users SET employee_no=?,username=?,display_name=?,
+                                  password_hash=?,role=?,preferred_lang=?,active=?,
+                                  must_change_password=? WHERE id=?""",
+                        values + (existing['id'],)
+                    )
+                    repaired += 1
+                else:
+                    c.execute(
+                        """INSERT INTO users(employee_no,username,display_name,password_hash,
+                                  role,preferred_lang,active,must_change_password)
+                           VALUES(?,?,?,?,?,?,?,?)""",
+                        values
+                    )
+                    created += 1
+
+            # The permanent emergency administrator always has a known deployment password.
+            admin_password = os.environ.get('SUPER_ADMIN_PASSWORD', 'Admin@73')
+            admin = c.execute(
+                "SELECT id FROM users WHERE employee_no='admin' OR username='admin' ORDER BY id LIMIT 1"
+            ).fetchone()
+            if admin:
+                c.execute(
+                    """UPDATE users SET employee_no='admin',username='admin',
+                              display_name='مدير النظام الشامل',password_hash=?,
+                              role='super_admin',active=1,must_change_password=0
+                       WHERE id=?""",
+                    (make_hash(admin_password), admin['id'])
+                )
+
+            total = c.execute('SELECT COUNT(*) FROM users').fetchone()[0]
+            active = c.execute('SELECT COUNT(*) FROM users WHERE active=1').fetchone()[0]
+            details = json.dumps(
+                {'source_accounts': len(source_users), 'repaired': repaired,
+                 'created': created, 'total': total, 'active': active},
+                ensure_ascii=False
+            )
+            c.execute(
+                """INSERT INTO magcamp_migrations(migration_key,completed_at,details)
+                   VALUES(?,?,?)
+                   ON CONFLICT (migration_key) DO UPDATE SET
+                     completed_at=EXCLUDED.completed_at,details=EXCLUDED.details""",
+                (marker_key, now(), details)
+            )
+            c.commit()
+        print(f'[MAG CAMP] 8.2.1 account recovery completed: {details}', flush=True)
+    except Exception as exc:
+        print(f'[MAG CAMP] 8.2.1 account recovery warning: {exc}', file=sys.stderr, flush=True)
+        if os.environ.get('ACCOUNT_REPAIR_STRICT', '0') == '1':
+            raise
+
+repair_user_accounts_821()
+
 def current_user():
  uid=session.get('uid')
  if not uid:return None
@@ -426,9 +534,9 @@ def login():
  if current_user():return redirect(url_for('dashboard'))
  error=''
  if request.method=='POST':
-  eno=request.form.get('employee_no','').strip(); pw=request.form.get('password','')
+  eno=request.form.get('employee_no','').replace('\u00a0',' ').strip(); pw=request.form.get('password','')
   with closing(conn()) as c:
-   u=c.execute('SELECT * FROM users WHERE employee_no=? AND active=1',(eno,)).fetchone()
+   u=c.execute('SELECT * FROM users WHERE (employee_no=? OR username=?) AND active=1 ORDER BY id LIMIT 1',(eno,eno)).fetchone()
    if u and verify(u['password_hash'],pw):
     chosen_lang=lang() or 'ar';session.clear();session['lang']=chosen_lang;session['uid']=u['id'];c.execute("UPDATE users SET last_login=datetime('now') WHERE id=?",(u['id'],));c.commit();return redirect(url_for('change_password') if u['must_change_password'] else url_for('dashboard'))
   error='الرقم الوظيفي أو كلمة المرور غير صحيحة' if lang()=='ar' else 'Invalid employee number or password'
@@ -439,7 +547,7 @@ def logout():
 @app.route('/change-password',methods=['GET','POST'])
 @login_required
 def change_password():
- u=current_user();err='';ok=''
+ u=current_user();err='';ok='تم تغيير كلمة المرور بنجاح' if request.args.get('changed')=='1' else ''
  if request.method=='POST':
   cur=request.form.get('current_password','');new=request.form.get('new_password','');conf=request.form.get('confirm_password','')
   if not verify(u['password_hash'],cur):err='كلمة المرور الحالية غير صحيحة'
@@ -450,7 +558,8 @@ def change_password():
     c.execute('UPDATE users SET password_hash=?,must_change_password=0 WHERE id=?',(make_hash(new),u['id']))
     c.execute('INSERT INTO password_change_logs(user_id,employee_no,display_name,changed_by,change_type,created_at) VALUES(?,?,?,?,?,?)',(u['id'],u['employee_no'],u['display_name'],u['id'],'self_change',now()))
     audit(c,u,'change_password','user',u['id'],{'employee_no':u['employee_no'],'change_type':'self_change'})
-    c.commit();ok='تم تغيير كلمة المرور بنجاح'
+    c.commit()
+   return redirect(url_for('change_password',changed='1'))
  return page('''<div class="card"><h2>تغيير كلمة المرور</h2>{% if err %}<p class="err">{{err}}</p>{% endif %}{% if ok %}<p class="ok">{{ok}}</p><a class="btn" href="{{url_for('dashboard')}}">{{t.home}}</a>{% else %}<form method="post"><input class="search" type="password" name="current_password" placeholder="الحالية" required><input class="search" type="password" name="new_password" placeholder="الجديدة" required><input class="search" type="password" name="confirm_password" placeholder="التأكيد" required><button class="btn">حفظ</button></form>{% endif %}</div>''','تغيير كلمة المرور',u,err=err,ok=ok)
 
 @app.get('/')

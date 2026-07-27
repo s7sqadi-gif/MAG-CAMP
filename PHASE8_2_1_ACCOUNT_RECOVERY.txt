@@ -1,0 +1,15 @@
+MAG CAMP 8.2.1 — Account and Login Recovery
+
+- Restores and verifies the complete 20-account roster from the bundled SQLite database.
+- Repairs missing or damaged PostgreSQL user records exactly once.
+- Preserves each employee number, display name, role, language, activation state, and initial password hash.
+- Recreates the permanent super-admin account safely:
+  employee number: admin
+  password: SUPER_ADMIN_PASSWORD environment value, default Admin@73
+- Supports login by employee number or username.
+- Fixes the first-login password-change flow using Post/Redirect/Get.
+- Adds a durable migration marker so future user password changes are not overwritten on restart.
+- Adds account totals to deployment logs without printing password hashes.
+
+Initial migrated employee accounts use their existing bundled password. In this release roster,
+the initial password is 123456 unless the user had already changed it in the bundled database.
