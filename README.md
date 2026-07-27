@@ -1,25 +1,13 @@
-MAG CAMP 7.2.0
+# MAG CAMP 8.2.2
 
-# MAG CAMP — Phase 4 Final Development Build
+إصدار إصلاح تسجيل الدخول المضمون لجميع الحسابات بعد الترحيل إلى PostgreSQL.
 
-Built additively on v4.6 Enterprise RC. The existing database and functionality are preserved.
+## بيانات الدخول بعد أول تشغيل
 
-See `PHASE4_FINAL_PROGRESS.txt` for implemented features and verification results.
+- المدير الشامل: `admin` / `Admin@73`
+- حسام القاضي: `109753` / `123456`
+- بقية المستخدمين: الرقم الوظيفي / `123456`
 
-# MAG CAMP — Phase 4.6 Enterprise RC
+تم تعطيل تغيير كلمة المرور الإجباري مؤقتًا، ويمكن تغييرها لاحقًا من داخل النظام.
 
-This release extends the existing production-ready Flask/SQLite project without rebuilding or deleting existing data.
-
-## Main changes
-- Executive home dashboard with KPIs, donut charts, latest maintenance/housing activity, and supervisor completion percentages.
-- Vacancy and overcrowding details remain in the separate Occupancy Management page.
-- Managers have a read-only executive overview and no “take inspection” action.
-- New housing, transfer, and removal workflow with room-supervisor approvals and final approval by the Housing Manager or Services Manager.
-- Cross-supervisor transfer requires approval from both room supervisors.
-- Amir and housing monitors can create requests but cannot execute them directly.
-- Maintenance workflow requires acceptance, execution, after photos, and closure verification by the original reporter.
-- Maintenance users have no housing permissions.
-- Improved MAG logo and preserved Arabic/English language selection after login.
-
-## Deployment
-Use the existing Render configuration. Preserve the production DATABASE_PATH and uploads storage. The migration is additive-only.
+راجع `PHASE8_2_2_GUARANTEED_LOGIN_FIX.txt` للتفاصيل.

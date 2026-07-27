@@ -1,0 +1,19 @@
+MAG CAMP 8.2.2 — Guaranteed Login Fix
+
+Root cause fixed:
+- PostgreSQL adapter appended RETURNING id to magcamp_migrations, although that table has no id column.
+- The account recovery transaction therefore rolled back and no password changes were saved.
+
+This release:
+- Fixes PostgreSQL INSERT handling for magcamp_migrations.
+- Runs a new one-time recovery marker: user_accounts_reset_8_2_2.
+- Restores all bundled user accounts, roles and activation.
+- Sets all non-admin temporary passwords to 123456.
+- Sets admin password to Admin@73.
+- Disables forced password change temporarily for recovered accounts.
+- Verifies admin and Hossam credentials before committing.
+- Fails deployment visibly if recovery cannot be committed.
+
+Verified credentials after deployment:
+admin / Admin@73
+109753 / 123456

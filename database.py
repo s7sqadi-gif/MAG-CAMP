@@ -113,7 +113,7 @@ class PostgresConnection:
 
         insert_match = _INSERT_RE.match(original)
         table_name = insert_match.group(1).strip('"') if insert_match else ""
-        no_id_tables = {"project_workers"}
+        no_id_tables = {"project_workers", "magcamp_migrations"}
         needs_id = bool(insert_match) and table_name not in no_id_tables and "RETURNING" not in translated.upper()
         if needs_id:
             translated += " RETURNING id"
