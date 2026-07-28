@@ -6,3 +6,5 @@ reportlab==4.4.3
 arabic-reshaper==3.0.1
 psycopg[binary]==3.2.13
 Pillow==11.3.0
+
+psycopg-pool==3.2.6
