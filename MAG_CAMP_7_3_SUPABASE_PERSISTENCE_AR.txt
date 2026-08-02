@@ -1,0 +1,25 @@
+MAG CAMP 7.3.2 — حفظ دائم مجاني عبر PostgreSQL/Supabase
+
+الفكرة:
+- التطبيق والواجهات والاستعلامات تبقى كما كانت في 7.3 وتعمل على SQLite.
+- PostgreSQL في Supabase يحفظ نسخة متسقة من قاعدة SQLite وجميع الصور.
+- عند إعادة تشغيل Render أو عمل Deploy، تُستعاد آخر نسخة قبل تشغيل التطبيق.
+- لا توجد إعادة كتابة لوحدات العمال أو الغرف أو الطلبات، لذلك تبقى وظائف 7.3 مستقرة.
+
+إعداد Render:
+1) ارفع محتويات هذه الحزمة إلى GitHub.
+2) أبقِ SECRET_KEY.
+3) أبقِ DATABASE_URL على رابط Supabase Session Pooler.
+4) احذف DATABASE_PATH وUPLOAD_PATH إذا كانا يشيران إلى /var/data.
+5) نفّذ Manual Deploy.
+
+علامات النجاح في Logs:
+[MAG CAMP] seeded PostgreSQL persistence from stable 7.3 database
+أو في التشغيلات التالية:
+[MAG CAMP] restored persistent SQLite
+
+مهم:
+- يستخدم Gunicorn عاملًا واحدًا للحفاظ على سلامة SQLite.
+- كل عملية POST ناجحة تحفظ Snapshot إلى PostgreSQL تلقائيًا.
+- الصور الجديدة تُحفظ أيضًا في جدول منفصل داخل PostgreSQL.
+- لا تحذف DATABASE_URL بعد بدء الاستخدام، لأنها مصدر الاستعادة الدائم.

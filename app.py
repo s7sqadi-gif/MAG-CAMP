@@ -8,11 +8,23 @@ from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
 from flask import Flask, abort, redirect, render_template_string, request, session, url_for, send_from_directory, send_file
 
-APP_VERSION='7.3'
-RELEASE_NAME='7.3-stability-and-operations'
+APP_VERSION='7.3.2'
+RELEASE_NAME='7.3-stable-supabase-persistence'
 ROOT=os.path.dirname(os.path.abspath(__file__)); DATA_DIR=os.path.join(ROOT,'data'); os.makedirs(DATA_DIR,exist_ok=True)
-DB=os.environ.get('DATABASE_PATH',os.path.join(DATA_DIR,'mhoms.db'))
-UPLOAD_DIR=os.environ.get('UPLOAD_PATH',os.path.join(ROOT,'uploads')); os.makedirs(UPLOAD_DIR,exist_ok=True)
+BUNDLED_DB=os.path.join(DATA_DIR,'mhoms.db')
+# Keep the proven SQLite runtime. On Render Free it lives in /tmp and is
+# restored from PostgreSQL before Flask starts.
+if os.environ.get('DATABASE_URL'):
+ RUNTIME_DIR=os.environ.get('MAGCAMP_RUNTIME_DIR','/tmp/magcamp')
+ os.makedirs(RUNTIME_DIR,exist_ok=True)
+ DB=os.environ.get('DATABASE_PATH',os.path.join(RUNTIME_DIR,'mhoms.db'))
+ UPLOAD_DIR=os.environ.get('UPLOAD_PATH',os.path.join(RUNTIME_DIR,'uploads'))
+else:
+ DB=os.environ.get('DATABASE_PATH',BUNDLED_DB)
+ UPLOAD_DIR=os.environ.get('UPLOAD_PATH',os.path.join(ROOT,'uploads'))
+os.makedirs(UPLOAD_DIR,exist_ok=True)
+from supabase_persistence import restore_or_seed, snapshot as persist_snapshot, status as persistence_status
+restore_or_seed(DB,BUNDLED_DB,UPLOAD_DIR)
 app=Flask(__name__); app.secret_key=os.environ.get('SECRET_KEY','local-development-secret-change-me')
 app.config.update(SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Lax',SESSION_COOKIE_SECURE=os.environ.get('RENDER','').lower()=='true',MAX_CONTENT_LENGTH=int(os.environ.get('MAX_UPLOAD_MB','25'))*1024*1024)
 
@@ -162,6 +174,22 @@ def ensure_schema():
     c.execute("INSERT INTO users(employee_no,username,display_name,password_hash,role,preferred_lang,active,must_change_password) VALUES(?,?,?,?,?,?,?,?)",('admin','admin','مدير النظام الشامل',make_hash(admin_password),'super_admin','ar',1,1))
   c.commit()
 ensure_schema()
+# Persist any additive schema migration performed during startup.
+try:
+ persist_snapshot(DB,UPLOAD_DIR)
+except Exception as exc:
+ print(f'[MAG CAMP] startup persistence warning: {exc}',flush=True)
+
+@app.after_request
+def persist_after_mutation(response):
+ # All operational writes in MAG CAMP are submitted as POST requests. Persist
+ # only successful writes, keeping normal page navigation fast.
+ if request.method in {'POST','PUT','PATCH','DELETE'} and response.status_code < 400:
+  try:
+   persist_snapshot(DB,UPLOAD_DIR)
+  except Exception as exc:
+   app.logger.exception('Persistent snapshot failed: %s',exc)
+ return response
 
 def current_user():
  uid=session.get('uid')
